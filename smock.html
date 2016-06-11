@@ -1,0 +1,2146 @@
+﻿<!doctype html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <!--
+        TODO
+  - Try using CSS variables for block size in px
+  - Use NxN block chunks (N=16? but test perf of different sizes. 16 is cute but something smaller may be needed)
+  - Create chunks in path layer on as-needed basis (and make entire path upfront)
+  - Path chunks and grid chunks have separate parents
+  - Current step flash block is entirely separate and overlaid like the circles, animating from transparent to white and back (in 3d mode start animating upward at peak of whiteness and don't come back down)
+  - Flash block animation repeats indefinitely but new flash block created on new step; on flash animation end old flash block is removed if it's no longer current. Flash animation duration .75s independent of step speed.
+  - vgrid and hgrid classes correspond to background-image with repeating-linear-gradient producing grid lines
+  - For each grid chunk determine which type is used most (heuristic by what is at center and whether ring thickness >5 blocks)
+  - Each grid chunk starts with <most used>-colored vgrid and then transparent hgrid, then has horizontal bars for contiguous areas of other color
+  - Grid chunk bar size doesn't include border and they have hgrid style
+  - Path chunks use a bar per segment (and one separate cell for connect if needed) and use hgrid/vgrid style as required
+  - Path chunk segments have black border edges
+  - Grid chunks are created the way gr rows are now by growGrid method.
+  - growGrid grows both grid and path layers in parallel in similar ways. Refreshing the path re-triggers growGrid but it knows the grid is fully built already so skips that part.
+  - Grid and path both get a class added to indicate being fully rendered (used in particular to remove shaded loading background entirely)
+  - In walk mode MAYBE hide all chunks that are further than a certain distance from the current walk point, but test to see if that's actually needed
+  - Change loadFromHash to no longer treat part of the url being missing/invalid as 'leave unchanged', but rather as 'reset to default'
+  - Change loadFromHash so that if the circle parameters aren't changed it knows not to rerender; if the path choice is unchanged it knows not to refresh the path; if we're already in walk mode it knows not to exit and re-enter it
+  - Change loadFromHash so that if the walk choices (fwd/rev/pause, clockwise/anti, ahead/behind, 3d, speed) are all that's changed then it simply changes the form controls' state and calls triggerWalkStep to pick up the changes
+  - Change url representation so that in unpaused states the step no isn't part of the url; in paused states the step no replaces 'paused' in the url
+  - Change loadFromHash so that if we are moving to a (paused) stepNo that's within 2 of current stepNo then it sets pendingSteps; if further away than that then it zooms straight to the appropriate point
+  - Use speed10 for pendingSteps regardless of speed slider
+  - Decrement pendingSteps at end of animation step, eg
+    if (playMode == paused) pendingSteps -= Math.sign(pendingSteps)
+    - Allows easy detection of which direction we're moving even if we're doing so as a pendingStep, which lets us fix the animation direction for the fades
+
+
+            - Walk mode:
+                - Fix step number, it does weird stuff when flipping directions
+                - Walk button can be a styled checkbox
+                - Disable form controls in walk mode
+                - Animate rotation and zoom into walk mode
+                - Animate out of walk mode
+                - Overlay a "#" type crosshair showing center square when walking
+                - Figure out scrolling up vs down correctly for coordinates
+                    - It's more or less 'go downwards if looking backward or playing in reverse but not both' but detecting the 'playing in reverse' isn't easy with singlestepping
+                    - Directions need to go upwards if you're playing in reverse
+                - Click directions to get full list
+                - Animate into and out of 3d mode
+                - Figure out something to make Firefox not crash on big circles
+            - Use mousemove events and an overlay square to show coords so that individual squares don't need to be individual divs
+            - Position highlight squares in both x and z dimension, don't bother with path-rows at all
+            - And do them all at once with a fade-in animation rather than caring about what grs exist
+            - Add extra row/col with coords on left/right/top/bottom (outermost values and multiples of 5, small font, text-align center on top/bottom and left/right on right/left, overflow visible)
+                - Consider making those slide into an overlay position during walk mode so they stay in view and rotate to stay upright
+            - Prettify controls
+                - (x) next to center coords to make it auto, visible only if not autocenter
+                - (x) next to each point to remove it, except the last empty one
+                - [Clear All] button under list of points (enabled if any points exist)
+                - Make radio lists appear on focus as well as hover
+                - Consider moving controls to top right instead of top left
+                - Pressing ',' in an X coord box jumps to corresponding Z
+                - Pressing Enter in an X or Z jumps to next box
+                - Make sure tab works with all controls
+                - Try making a graphical representation of path and point size tuning
+            - Fix autocenter algorithm
+                - If only one point, use it. If zero points, use 0,0.
+                - Take two furthest points apart, take midpoint, set radius at half their distance apart
+                - Iterate as follows:
+                - Classify all points as inside or outside the current circle.
+                - If all inside, we're done.
+                - Take furthest point from current center and use existing algorithm to grow circle to include it.
+        -->
+        <title>Stuart's Minecraft Overcomplicated Circle Kit</title>
+        <style type="text/css">
+            body {
+                background: linear-gradient(to bottom, black, #333);
+                background-size: auto 250px;
+            }
+
+            input[type='number'] {
+                width: 5em;
+            }
+
+            .centerlabel {
+                display: none;
+            }
+            .autocenter .centerlabel {
+                display: inline;
+            }
+
+            .column {
+                background: linear-gradient(to right, #444, #666);
+                padding: 10px;
+                color: #ccc;
+                float: left;
+                height: 210px;
+                width: 18em;
+                border-radius: 5px;
+                margin-right: 5px;
+            }
+            .pointscol {
+                overflow-y: auto;
+                width: 12em;
+            }
+
+            .radiolist {
+                overflow: visible;
+                vertical-align: top;
+                margin: 4px 0;
+            }
+            .radiolist:hover .itemwrapper {
+                z-index: 1;
+            }
+            .radiolist .radiolabel {
+                display: inline-block;
+                padding: 5px 0;
+                vertical-align: top;
+            }
+            .radiolist .itemwrapper {
+                vertical-align: top;
+                top: 0px;
+                position: relative;
+                display: inline-block;
+                height: 0px;
+                overflow: visible;
+            }
+            .radiolist .items {
+                position: absolute;
+                white-space: nowrap;
+                padding: 5px;
+                padding-right: 20px;
+                border-radius: 3px;
+                background-color: #777;
+            }
+            .radiolist label {
+                display: block;
+                height: 0px;
+                overflow: hidden;
+            }
+            .radiolist label.currentradio, .radiolist:hover label {
+                height: auto;
+            }
+            #walk {
+                float: right;
+            }
+
+            span.block, span.stack {
+                display: inline-block;
+                border: 1px solid black;
+                width: 10px;
+                height: 10px;
+                margin-right: 1px;
+                margin-left: 2px;
+            }
+            span.stack {
+                position: relative;
+                top: -2px;
+                left: -2px;
+                box-shadow: 2px 2px 0px -1px #555, 2px 2px black, 4px 4px 0px -1px #555, 4px 4px black;
+                margin-right: 3px;
+            }
+            span.path-block {
+                background: linear-gradient(45deg, blue, blue 50%, purple 51%, purple)
+            }
+
+            div.progress {
+                background: linear-gradient(to right, #444, #777);
+                background-position: left;
+                background-repeat: no-repeat;
+            }
+
+            .grid {
+                border-left: 10px solid black; /* Variable */
+                border-top: 10px solid black; /* Variable */
+            }
+
+            @keyframes rowin {
+                from {
+                    opacity: 0;
+                }
+            }
+
+            div.gr, div.path-row {
+                width: 100%;
+                height: 90px; /* Variable */
+                line-height: 1px;
+                animation-name: rowin;
+                animation-duration: 0.5s;
+                animation-fill-mode: backwards;
+                padding-bottom: 10px; /* Variable */
+                position: relative;
+            }
+            div.gr {
+                background-color: black;
+            }
+
+            span.gchunk {
+                background-image: repeating-linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0) 90px, black 90px, black 100px);
+                display: inline-block;
+                vertical-align: top;
+                width: 100px; /* Variable */ /* Gets overridden by inline style */
+                height: 90px; /* Variable */
+                padding: 0px;
+                margin: 0px;
+            }
+
+            span.gb {
+                position: absolute;
+                display: block;
+                top: 0px;
+                width: 90px; /* Variable */
+                height: 90px; /* Variable */
+                padding: 0px;
+                margin: 0px;
+            }
+
+            .gchunk.inside, .interior-block {
+                background-color: #af8;
+            }
+            span.interior-block.stack {
+                box-shadow: 2px 2px 0px -1px #af8, 2px 2px black, 4px 4px 0px -1px #af8, 4px 4px black;
+            }
+
+            .gchunk.ring, .ring-block {
+                background-color: #333;
+            }
+            span.ring-block.stack {
+                box-shadow: 2px 2px 0px -1px #333, 2px 2px black, 4px 4px 0px -1px #333, 4px 4px black;
+            }
+
+            .gchunk.outside {
+                background-color: #686;
+            }
+
+            .gb.highlight, .highlight-block {
+                background-color: blue;
+            }
+            span.highlight-block.stack {
+                box-shadow: 2px 2px 0px -1px blue, 2px 2px black, 4px 4px 0px -1px blue, 4px 4px black;
+            }
+
+            .gb.connect, .connect-block {
+                background-color: purple;
+            }
+            span.connect-block.stack {
+                box-shadow: 2px 2px 0px -1px purple, 2px 2px black, 4px 4px 0px -1px purple, 4px 4px black;
+            }
+
+            span.path-block.stack {
+                box-shadow: 2px 2px 0px -1px purple, 2px 2px black, 4px 4px 0px -1px blue, 4px 4px black;
+            }
+
+            @keyframes flash {
+                50% {
+                    background-color: white;
+                }
+            }
+            .gb.walkpoint {
+                animation-name: flash;
+            }
+
+            .gridholder {
+                position: relative;
+                background: repeating-linear-gradient(to right bottom, #555, #aaa, #555, #aaa, #555);
+                background-size: 200px 200px;
+            }
+            .path-layer {
+                position: absolute;
+                top: 10px;
+                left: 10px;
+                bottom: 0px;
+                right: 0px;
+            }
+
+            @keyframes circlein {
+                from {
+                    transform: scale(0);
+                }
+
+                60% {
+                    border-width: 10px;
+                    margin-left: 0px;
+                    margin-top: 0px;
+                }
+
+                80% {
+                    border-width: 30px;
+                    margin-left: -20px;
+                    margin-top: -20px;
+                    transform: scale(1.02);
+                }
+            }
+
+            .circle {
+                position: absolute;
+                pointer-events: none;
+                width: 0px;
+                height: 0px;
+                border: 10px solid black; /* Variable */
+                border-radius: 50%;
+                animation-name: circlein;
+                animation-duration: 1s;
+                box-shadow: 0 0 20px black, inset 0 0 20px black;
+            }
+
+            .circle.center {
+                background-color: green;
+            }
+
+            .circle.point {
+                border-color: red;
+                background-color: rgba(255, 0, 0, 0.3);
+            }
+
+            .circle.inner {
+                border-color: magenta;
+            }
+
+            .circle.mid {
+                border-color: purple;
+            }
+
+            .circle.outer {
+                border-color: blue;
+            }
+
+            .viewport {
+                overflow: hidden;
+                position: fixed;
+                top: 250px;
+                left: 0px;
+                right: 0px;
+                bottom: 0px;
+            }
+            .viewport .sky {
+                position: absolute;
+                left: -100%;
+                top: -100%;
+                right: -100%;
+                bottom: -100%;
+                padding: 100%;
+                background: linear-gradient(to left, #f8bd17 30%, #b6ebf5, #83e5f7, #0c2174 70%);
+                background-size: 140% 140%;
+                background-position: center;
+            }
+            .viewport.face-north .sky {
+                transform: rotate(0deg);
+            }
+            @keyframes bgnorthleft { from { transform: rotate(-90deg); } }
+            @keyframes bgnorthright { from { transform: rotate(90deg); } }
+            @keyframes bgnorth180 { from { transform: rotate(180deg); } }
+            .viewport.face-north.turn-left .sky {
+                animation-name: bgnorthleft;
+            }
+            .viewport.face-north.turn-right .sky {
+                animation-name: bgnorthright;
+            }
+            .viewport.face-north.turn-180 div.sky {
+                animation-name: bgnorth180;
+            }
+
+            .viewport.face-east .sky {
+                transform: rotate(-90deg);
+            }
+            @keyframes bgeastleft { from { transform: rotate(-180deg); } }
+            @keyframes bgeastright { from { transform: rotate(0deg); } }
+            @keyframes bgeast180 { from { transform: rotate(90deg); } }
+            .viewport.face-east.turn-left .sky {
+                animation-name: bgeastleft;
+            }
+            .viewport.face-east.turn-right .sky {
+                animation-name: bgeastright;
+            }
+            .viewport.face-east.turn-180 div.sky {
+                animation-name: bgeast180;
+            }
+
+            .viewport.face-south .sky {
+                transform: rotate(180deg);
+            }
+            @keyframes bgsouthleft { from { transform: rotate(90deg); } }
+            @keyframes bgsouthright { from { transform: rotate(270deg); } }
+            @keyframes bgsouth180 { from { transform: rotate(360deg); } }
+            .viewport.face-south.turn-left .sky {
+                animation-name: bgsouthleft;
+            }
+            .viewport.face-south.turn-right .sky {
+                animation-name: bgsouthright;
+            }
+            .viewport.face-south.turn-180 div.sky {
+                animation-name: bgsouth180;
+            }
+
+            .viewport.face-west .sky {
+                transform: rotate(90deg);
+            }
+            @keyframes bgwestleft { from { transform: rotate(0deg); } }
+            @keyframes bgwestright { from { transform: rotate(180deg); } }
+            @keyframes bgwest180 { from { transform: rotate(270deg); } }
+            .viewport.face-west.turn-left .sky {
+                animation-name: bgwestleft;
+            }
+            .viewport.face-west.turn-right .sky {
+                animation-name: bgwestright;
+            }
+            .viewport.face-west.turn-180 div.sky {
+                animation-name: bgwest180;
+            }
+
+            .table {
+                position: absolute;
+                top: 0px;
+                bottom: 0px;
+                left: 0px;
+                right: 0px;
+            }
+
+            @keyframes turnleft {
+                from {
+                    transform: rotate(-90deg);
+                }
+            }
+            @keyframes turnright {
+                from {
+                    transform: rotate(90deg);
+                }
+            }
+            @keyframes turn180 {
+                from {
+                    transform: rotate(180deg);
+                }
+                to {
+                    transform: rotate(0);
+                }
+            }
+
+            @keyframes movenorth {
+                from {
+                    transform: translate(0, -100px); /* Variable */
+                }
+            }
+            @keyframes moveeast {
+                from {
+                    transform: translate(100px, 0); /* Variable */
+                }
+            }
+            @keyframes movesouth {
+                from {
+                    transform: translate(0, 100px); /* Variable */
+                }
+            }
+            @keyframes movewest {
+                from {
+                    transform: translate(-100px, 0); /* Variable */
+                }
+            }
+
+            .face-north #facetable {
+                transform: rotate(0);
+            }
+            .face-east #facetable {
+                transform: rotate(-90deg);
+            }
+            .face-south #facetable {
+                transform: rotate(180deg);
+            }
+            .face-west #facetable {
+                transform: rotate(90deg);
+            }
+
+            .turn-left #turntable {
+                animation-name: turnleft;
+            }
+            .turn-right #turntable {
+                animation-name: turnright;
+            }
+            .viewport.turn-180 #turntable {
+                animation-name: turn180;
+            }
+            .move-north #movetable {
+                animation-name: movenorth;
+            }
+            .move-east #movetable {
+                animation-name: moveeast;
+            }
+            .move-south #movetable {
+                animation-name: movesouth;
+            }
+            .move-west #movetable {
+                animation-name: movewest;
+            }
+            .viewport .window {
+                animation-duration: 1s;
+                position: absolute;
+                left: 0;
+                top: 0;
+                min-width: calc(100% - 100px);
+                min-height: calc(100% - 100px);
+                padding: 50px;
+                overflow: auto;
+            }
+
+            @keyframes windowwalkin {
+                from { top: 0; }
+            }
+            @keyframes windowwalkout {
+                from {
+                    top: 77px;
+                    width: calc(100% - 100px);
+                    height: calc(100% - 177px);
+                }
+            }
+
+            .viewport.end-walk .window {
+                animation-name: windowwalkout;
+            }
+
+            .viewport.walk-mode .window {
+                animation-name: windowwalkin;
+                top: 77px;
+                width: calc(100% - 100px);
+                height: calc(100% - 177px);
+                overflow: hidden;
+            }
+
+            .viewport .walk-info {
+                animation-duration: 1s;
+                height: 75px;
+                position: absolute;
+                top: -77px;
+                width: 100%;
+                border-bottom: 2px solid #333;
+                overflow: hidden;
+            }
+            @keyframes walkinfoin {
+                from { top: -77px; }
+            }
+            @keyframes walkinfoout {
+                from { top: 0px; }
+            }
+            .viewport.end-walk .walk-info {
+                animation-name: walkinfoout;
+            }
+            .viewport.walk-mode .walk-info {
+                top: 0px;
+                animation-name: walkinfoin;
+            }
+
+            .walk-toolbar {
+                vertical-align: top;
+                background-color: #333;
+                padding-bottom: 1px;
+            }
+            .walk-toolbar-grp {
+                padding-left: 5px;
+                padding-right: 5px;
+            }
+            #step-rev {
+                transform: scaleX(-1);
+            }
+            .tool-button:not(.big) {
+                font-size: larger;
+            }
+            .tool-button input {
+                display: none;
+            }
+            .tool-button input:checked + label {
+                background: blue;
+                color: white;
+                width: 20px;
+                display: inline-block;
+                font-weight: bold;
+            }
+            .tool-button {
+                border: 1px solid #333;
+                color: #ccc;
+                width: 20px;
+                display: inline-block;
+                cursor: default;
+                text-align: center;
+                vertical-align: top;
+                line-height: 25px;
+            }
+            .tool-button:hover, .tool-button:hover input[type='checkbox']:checked + label {
+                background-color: purple;
+            }
+            .tool-slider input {
+                vertical-align: top;
+                width: 100px;
+                height: 20px;
+            }
+            .tool-slider input::-moz-range-thumb {
+                background-color: blue;
+            }
+            .tool-slider input::-moz-range-thumb:hover {
+                background-color: purple;
+            }
+            #exit-walk {
+                float: right;
+            }
+
+            .viewport .walk-info form, .viewport .walk-info .walk-directionbar, .viewport .walk-info .walk-location {
+                display: block;
+                width: 35em;
+                margin-left: auto;
+                margin-right: auto;
+                overflow: hidden;
+                border-left: 2px solid #333;
+                border-right: 2px solid #333;
+                position: relative;
+            }
+            .walk-directionbar {
+                height: 23px;
+                border-bottom: 2px solid #333;
+            }
+
+            @keyframes upfading {
+                from { top: 25px; }
+            }
+            @keyframes downfading {
+                from { top: -25px; }
+            }
+            @keyframes fadeprev {
+                from { top: 0px; }
+            }
+
+            .fade-box {
+                position: relative;
+                display: inline-block;
+            }
+            .fade {
+                position: absolute;
+            }
+            .viewport .fade-box.fading .fade {
+                animation-fill-mode: both;
+                animation-timing-function: ease-in;
+            }
+            .viewport .fade-box.fading .fade.current {
+                top: 0px;
+                animation-name: upfading;
+            }
+            .viewport .fade-box .fade.previous {
+                visibility: hidden;
+            }
+            .viewport .fade-box.fading .fade.previous {
+                top: -25px;
+                animation-name: fadeprev;
+                visibility: visible;
+            }
+
+            .viewport.turn-left .walk-face.fade-box.fading .fade.current {
+                animation-name: downfading;
+            } 
+            .viewport.turn-left .walk-face.fade-box.fading .fade.previous {
+                top: 25px;
+            }
+
+            .walk-info span, .walk-info strong {
+                display: inline-block;
+            }
+            .viewport.walk-info > span {
+                height: 23px;
+                border-left: 1px solid black;
+                border-right: 1px solid black;
+                padding: 0px 5px;
+            }
+            .walk-label {
+                height: 21px;
+                background-color: #333;
+                color: #ccc;
+                padding: 1px 5px;
+            }
+            .walk-direction {
+                width: 34em;
+                height: 25px;
+            }
+            .walk-direction .fade {
+                width: 34em;
+                text-align: center;
+            }
+            .walk-coord {
+                 width: calc(6em + 10px);
+            }
+            .walk-coord .walk-label {
+                width: 1em;
+            }
+            .walk-coord .fade {
+                width: 5em;
+                text-align: center;
+            }
+            .walk-face .walk-label {
+                width: 5em;
+            }
+            .walk-face .fade {
+                width: 14em;
+                padding-left: 5px;
+            }
+            .viewport .backdrop, .viewport #backtable {
+                position: absolute;
+            }
+            .viewport:not(.walk-mode) #backtable {
+                padding: 20px;
+            }
+            .viewport:not(.walk-mode) .backdrop {
+                transform: translate(-50%, -50%) scale(0.1) translate(50%, 50%);
+            }
+            .viewport.walk-mode .backdrop {
+                transform: translate(-50%, -50%) scale(0.4);
+            }
+            .viewport.walk-mode #backtable {
+                transform: translate(50%, 25%);
+            }
+
+            .viewport.walk-mode.view3d * {
+                transform-style: preserve-3d;
+            }
+            .viewport.walk-mode.view3d .backdrop {
+                transform: translate(-50%, -50%) scale(0.8);
+            }
+            .viewport.walk-mode.view3d #backtable {
+                perspective: 1000px; /* Variable? */
+                perspective-origin: 0% 50%;
+            }
+            .viewport.walk-mode.view3d #tilttable {
+                transform: translateZ(-200px) rotateX(40deg); /* Variable */
+            }
+            .viewport.walk-mode.view3d.turn-right #tilttable, .viewport.walk-mode.view3d.turn-left #tilttable, .viewport.walk-mode.view3d.turn-180 #tilttable {
+                animation-name: glance-down;
+            }
+            @keyframes bounce3d {
+                50% {
+                    background-color: white;
+                    transform: translateZ(20px); /* Variable */
+                }
+            }
+            .viewport.view3d .gridholder {
+                background: none;
+            }
+            .viewport.view3d .grid, .viewport.view3d .gridholder, .viewport.view3d .path-layer, .viewport.view3d .gr, .viewport.view3d .gb {
+                outline: 1px solid transparent;
+            }
+            .viewport.view3d .path-layer .gb.walkpoint {
+                animation-name: bounce3d;
+            }
+            .viewport.view3d .path-layer {
+                transform: translateZ(10px); /* Variable */
+            }
+            .viewport.view3d .circle {
+                transform: translateZ(20px); /* Variable */
+            }
+
+            @keyframes glance-down {
+                30% {
+                    transform: translate3d(0, 0, -200px) rotateX(30deg) translate3d(0, 100px, 0); /* Variable x2 */
+                }
+                70% {
+                    transform: translate3d(0, 0, -200px) rotateX(30deg) translate3d(0, 100px, 0); /* Variable x2 */
+                }
+            }
+
+            /* Speeds 1-10 consisting of 1=4s, 2=3.5s, 3=3s, 4=2.5s, 5=2s, 6=1.5s, 7=1.25s, 8=1s, 9=0.75s, 10=0.5s */
+            .viewport.speed1 .walkanim { animation-duration: 4s; }
+            .viewport.speed1 .fade { animation-duration: 2s; } /* Fading is half the time of everything else */
+            .viewport.speed1 .walk-direction .fade { animation-delay: 2s; }
+
+            .viewport.speed2 .walkanim { animation-duration: 3.5s; }
+            .viewport.speed2 .fade { animation-duration: 1.75s; } /* Fading is half the time of everything else */
+            .viewport.speed2 .walk-direction .fade { animation-delay: 1.75s; }
+            
+            .viewport.speed3 .walkanim { animation-duration: 3s; }
+            .viewport.speed3 .fade { animation-duration: 1.5s; } /* Fading is half the time of everything else */
+            .viewport.speed3 .walk-direction .fade { animation-delay: 1.5s; }
+            
+            .viewport.speed4 .walkanim { animation-duration: 2.5s; }
+            .viewport.speed4 .fade { animation-duration: 1.25s; } /* Fading is half the time of everything else */
+            .viewport.speed4 .walk-direction .fade { animation-delay: 1.25s; }
+            
+            .viewport.speed5 .walkanim { animation-duration: 2s; }
+            .viewport.speed5 .fade { animation-duration: 1s; } /* Fading is half the time of everything else */
+            .viewport.speed5 .walk-direction .fade { animation-delay: 1s; }
+            
+            .viewport.speed6 .walkanim { animation-duration: 1.5s; }
+            .viewport.speed6 .fade { animation-duration: 0.75s; } /* Fading is half the time of everything else */
+            .viewport.speed6 .walk-direction .fade { animation-delay: 0.75s; }
+            
+            .viewport.speed7 .walkanim { animation-duration: 1.25s; }
+            .viewport.speed7 .fade { animation-duration: 0.625s; } /* Fading is half the time of everything else */
+            .viewport.speed7 .walk-direction .fade { animation-delay: 0.625s; }
+            
+            .viewport.speed8 .walkanim { animation-duration: 1s; }
+            .viewport.speed8 .fade { animation-duration: 0.5s; } /* Fading is half the time of everything else */
+            .viewport.speed8 .walk-direction .fade { animation-delay: 0.5s; }
+            
+            .viewport.speed9 .walkanim { animation-duration: 0.75s; }
+            .viewport.speed9 .fade { animation-duration: 0.375s; } /* Fading is half the time of everything else */
+            .viewport.speed9 .walk-direction .fade { animation-delay: 0.375s; }
+            
+            .viewport.speed10 .walkanim { animation-duration: 0.5s; }
+            .viewport.speed10 .fade { animation-duration: 0.25s; } /* Fading is half the time of everything else */
+            .viewport.speed10 .walk-direction .fade { animation-delay: 0.25s; }
+        </style>
+        <script src="https://code.jquery.com/jquery-1.12.3.min.js" integrity="sha256-aaODHAgvwQW1bFOGXMeX+pC4PZIPsvn2h1sArYOhgXQ=" crossorigin="anonymous"></script>
+        <!--script src="file:///c|/program files (x86)/microsoft asp.net/asp.net web stack 5/packages/jquery.1.10.2/content/scripts/jquery-1.10.2.min.js"--><!--/script-->
+        <script>
+            var pointCounter = 0;
+            var center = { x: 0, z: 0 };
+            var inner = 0;
+            var outer = 0.5;
+            var from = { x: 0, z: 0 };
+            var to = { x: 0, z: 0 };
+            var trow = null;
+
+            $(function () {
+                loadFromHash();
+                $('#mainForm').on('change', refreshForm);
+                $('.viewport').on('animationend', walkStepAnimationEnd);
+                $('#circleHolder').on('click', pointClick);
+                $(window).on('hashchange', loadFromHash);
+//                $('#directions').click(function () { $('#directions').text(getFullDirections(1, getCurrentHighlightFunction())) });
+
+                $('#walk').on('click', startWalk);
+                $('.tool-button.trigger').click(triggerWalkStep);
+                $('.tool-button:not(.trigger)').click(setHash);
+                $('#step-rev').click(function () { walkSingleStep(-1); });
+                $('#step-fwd').click(function () { walkSingleStep(1); });
+                $('#exit-walk').click(endWalk);
+            });
+
+            function refreshForm(evt) {
+
+                $('.currentradio').removeClass('currentradio');
+                $('.radiolist input:checked').parent('label').addClass('currentradio');
+
+                if (evt && evt.originalEvent.target.getAttribute('name') == 'highlight') {
+                    refreshPath();
+                    setHash();
+                    return;
+                }
+
+                if ($('#pointsList pointrow').length == 0) addPoint();
+
+                var radius = document.getElementById('correction_radius');
+                setBoolAttr(radius, 'disabled',
+                  document.forms[0]['correction'].value != 'custom');
+                radius.valueAsNumber = getCorrectionRadius();
+                setCoordsRequired('center');
+                refreshPointsList();
+                $('#validate').click();
+                if (document.forms[0].checkValidity()) buildCircle();
+                endWalk();
+            }
+            function refreshPointsList() {
+                var lastId = $('#pointsList .pointrow').last().attr('id');
+                $('#pointsList .pointrow').each(function () {
+                    var pointId = $(this).attr('id');
+                    setCoordsRequired(pointId);
+                    if (pointId == lastId) {
+                        if ($('#' + pointId + '_x').val() != '' &&
+                            $('#' + pointId + '_z').val() != '') {
+                            addPoint();
+                        }
+                    } else {
+                        if ($('#' + pointId + '_x').val() == '' &&
+                            $('#' + pointId + '_z').val() == '') {
+                            $(this).remove();
+                        }
+                    }
+                });
+            }
+            function addPoint() {
+                pointCounter++;
+                var tmpl = document.getElementById('pointTemplate');
+                var row = document.importNode(tmpl.content, true);
+                row.querySelector('.pointrow').setAttribute('id', 'point' + pointCounter);
+                row.querySelector('.pointx').setAttribute('id', 'point' + pointCounter + '_x');
+                row.querySelector('.pointz').setAttribute('id', 'point' + pointCounter + '_z');
+                document.getElementById('pointsList').appendChild(row);
+            }
+            function getPoints() {
+                return $('#pointsList .pointrow').map(function () {
+                    var pointId = $(this).attr('id');
+                    var xElem = document.getElementById(pointId + '_x');
+                    var zElem = document.getElementById(pointId + '_z');
+
+                    if (xElem.value == '' || zElem.value == '') {
+                        return null;
+                    }
+                    return { x: xElem.valueAsNumber, z: zElem.valueAsNumber };
+                }).get();
+            }
+            function pointClick(evt) {
+                var cell = evt.originalEvent.target;
+                if (!$(cell).hasClass('gb')) return;
+                var point = cellCoords(cell);
+                if (evt.originalEvent.shiftKey) {
+                    document.getElementById('center_x').valueAsNumber = point.x;
+                    document.getElementById('center_z').valueAsNumber = point.z;
+                } else {
+                    var found = false;
+                    $('#pointsList .pointrow').each(function () {
+                        var x = this.querySelector('.pointx').valueAsNumber;
+                        var z = this.querySelector('.pointz').valueAsNumber;
+                        if (x == point.x && z == point.z) {
+                            $(this).remove();
+                            found = true;
+                            return false;
+                        }
+                    });
+
+                    if (!found) {
+                        addPoint();
+                        document.getElementById('point' + pointCounter + '_x').valueAsNumber = point.x;
+                        document.getElementById('point' + pointCounter + '_z').valueAsNumber = point.z;
+                    }
+                }
+                refreshForm();
+            }
+            function setCoordsRequired(nameBase) {
+                var xElem = document.getElementById(nameBase + '_x');
+                var zElem = document.getElementById(nameBase + '_z');
+                setBoolAttr(xElem, 'required', zElem.value != '');
+                setBoolAttr(zElem, 'required', xElem.value != '');
+            }
+            function setBoolAttr(elem, attr, value) {
+                if (value) {
+                    $(elem).attr(attr, attr);
+                } else {
+                    $(elem).removeAttr(attr);
+                }
+            }
+            function getCorrectionRadius() {
+                switch (document.forms[0]['correction'].value) {
+                    case 'point': return 0;
+                    case 'inside': return 0.5;
+                    case 'area': return 1.0 / Math.sqrt(Math.PI);
+                    case 'outside': return Math.SQRT1_2;
+                    case 'custom': return document.getElementById('correction_radius').valueAsNumber;
+                }
+                return 0;
+            }
+            function vecEqual(a, b) {
+                return a.x == b.x && a.z == b.z;
+            }
+            function vecAdd(a, b) {
+                return { x: a.x + b.x, z: a.z + b.z };
+            }
+            function vecSub(a, b) {
+                return { x: a.x - b.x, z: a.z - b.z };
+            }
+            function vecDot(a, b) {
+                return a.x * b.x + a.z * b.z;
+            }
+            function vecMul(v, scalar) {
+                return { x: v.x * scalar, z: v.z * scalar };
+            }
+            function vecDiv(v, scalar) {
+                return { x: v.x / scalar, z: v.z / scalar };
+            }
+            function vecSquared(v) {
+                return vecDot(v, v);
+            }
+            function vecMod(v) {
+                return Math.sqrt(vecSquared(v));
+            }
+            function getDistance(pt1, pt2) {
+                return vecMod(vecSub(pt1, pt2));
+            }
+            function vecStr(v) {
+                return 'X' + v.x + ', Z' + v.z;
+            }
+            function pointToId(point) {
+                return 'x' + point.x + 'z' + point.z;
+            }
+            function idToPoint(id) {
+                var zstart = id.indexOf('z');
+                return { x: parseInt(id.substring(1, zstart)), z: parseInt(id.substring(zstart + 1)) };
+            }
+            function pointToHash(point) {
+                return point.x + (point.z >= 0 ? '_' : '') + point.z;
+            }
+            function isSemiPointHash(hash) {
+                return /^-?[0-9]+(\.5)?[_-][0-9]+(\.5)?$/.test(hash);
+            }
+            function isPointHash(hash) {
+                return /^-?[0-9]+[_-][0-9]+$/.test(hash);
+            }
+            function hashToPoint(hash) {
+                var xend = hash.indexOf('_', 1);
+                var zstart = xend + 1;
+                if (xend < 0) {
+                    xend = hash.indexOf('-', 1);
+                    zstart = xend;
+                }
+                return { x: parseFloat(hash.substring(0, xend)), z: parseFloat(hash.substring(zstart)) };
+            }
+            function getHash() {
+                var centerStr = 'auto';
+                var cxElem = document.getElementById('center_x');
+                var czElem = document.getElementById('center_z');
+                if (cxElem.value != '' && czElem.value != '') {
+                    centerStr = pointToHash({ x: cxElem.valueAsNumber, z: czElem.valueAsNumber });
+                }
+                var correctionStr = document.forms[0]['correction'].value;
+                if (correctionStr == 'custom') correctionStr = document.getElementById('correction_radius').value;
+                var pointsStr = getPoints().map(pointToHash).join('/');
+
+                var hash = '#' + centerStr + '/' + correctionStr;
+                if (pointsStr != '') hash += '/' + pointsStr;
+
+                var highStr = document.forms[0]['highlight'].value;
+                if (highStr != '') hash += '/' + highStr;
+
+                if (walkSegment != null) {
+                    var dir = getWalkDirection() > 0 ? 'r' : 'l';
+                    var face = getWalkFace() > 0 ? 'f' : 'b';
+                    var speed = document.getElementById('speed').valueAsNumber;
+                    var is3d = document.getElementById('3d-mode').checked ? '3d/' : '';
+                    var mode = null;
+                    switch (getWalkPlayMode()) {
+                        case -1: mode = 'rev'; break;
+                        case 1: mode = 'play'; break;
+                        default: mode = 'paused'; break;
+                    }
+                    hash += '/' + dir + '/' + face + '/' + speed + '/' + is3d + mode + '/' + walkStepNo;
+                }
+
+                return hash;
+            }
+
+            function loadFromHash() {
+
+                if (location.hash.length <= 1) {
+                    refreshForm();
+                    return;
+                }
+
+                var i = 0;
+                var parts = location.hash.substring(1).split('/');
+
+                if (parts[i] == 'auto') {
+                    document.getElementById('center_x').value = '';
+                    document.getElementById('center_z').value = '';
+                } else if (isSemiPointHash(parts[i])) {
+                    var centerPt = hashToPoint(parts[i]);
+                    document.getElementById('center_x').valueAsNumber = centerPt.x;
+                    document.getElementById('center_z').valueAsNumber = centerPt.z;
+                } else {
+                    refreshForm();
+                    return;
+                }
+
+                i++;
+                if (i >= parts.length) {
+                    refreshForm();
+                    return;
+                }
+
+                var correction = parseFloat(parts[i]);
+                if (isNaN(correction)) {
+                    var radio = document.getElementById('correction_' + parts[i]);
+                    if (!radio) {
+                        refreshForm();
+                        return;
+                    }
+                    radio.checked = true;
+                } else {
+                    document.getElementById('correction_custom').checked = true;
+                    document.getElementById('correction_radius').valueAsNumber = correction;
+                }
+
+                i++;
+                if (i >= parts.length) {
+                    refreshForm();
+                    return;
+                }
+
+                $('#pointsList').empty();
+
+                while (i < parts.length && isPointHash(parts[i])) {
+                    addPoint();
+                    var point = hashToPoint(parts[i]);
+                    document.getElementById('point' + pointCounter + '_x').valueAsNumber = point.x;
+                    document.getElementById('point' + pointCounter + '_z').valueAsNumber = point.z;
+
+                    i++;
+                }
+                addPoint();
+
+                if (i >= parts.length) {
+                    refreshForm();
+                    return;
+                }
+
+                var hradio = document.getElementById('highlight_' + parts[i]);
+                if (!hradio) {
+                    refreshForm();
+                    return;
+                }
+                hradio.checked = true;
+
+                refreshForm();
+
+                i++;
+                if (i >= parts.length) {
+                    return;
+                }
+
+                var toolbar = document.getElementById('walkToolbar');
+
+                if (parts[i] == 'r') toolbar.dir.value = 'clockwise';
+                else if (parts[i] == 'l') toolbar.dir.value = 'anticlockwise';
+                else return;
+
+                i++;
+                if (i >= parts.length) {
+                    walkFromHash(0);
+                    return;
+                }
+
+                if (parts[i] == 'f') toolbar.face.value = 'ahead';
+                else if (parts[i] == 'b') toolbar.face.value = 'behind';
+                else {
+                    walkFromHash(0);
+                    return;
+                }
+
+                i++;
+                if (i >= parts.length) {
+                    walkFromHash(0);
+                    return;
+                }
+
+                speed = parseInt(parts[i]);
+                if (speed >= 1 && speed <= 10) toolbar.speed.value = speed;
+                else {
+                    walkFromHash(0);
+                    return;
+                }
+
+                i++;
+                if (i >= parts.length) {
+                    walkFromHash(0);
+                    return;
+                }
+
+                toolbar['3d-mode'].checked = parts[i] == '3d';
+                if (parts[i] == '3d') i++;
+
+                if (i >= parts.length) {
+                    walkFromHash(0);
+                    return;
+                }
+
+                if (parts[i] == 'rev') toolbar.playmode.value = 'play-rev';
+                else if (parts[i] == 'play') toolbar.playmode.value = 'play-fwd';
+                else if (parts[i] == 'paused') toolbar.playmode.value = 'pause';
+                else {
+                    walkFromHash(0);
+                    return;
+                }
+
+                i++;
+                if (i >= parts.length) {
+                    walkFromHash(0);
+                    return;
+                }
+
+                walkFromHash(parseInt(parts[i]));
+            }
+
+            function renderingComplete() {
+                // Not sure if we want to do anything here but this way we can
+            }
+
+            function walkFromHash(stepNo) {
+                var highlightFn = getCurrentHighlightFunction();
+                var first = findStartSegment(getWalkDirection(), highlightFn);
+                if (first == null) return;
+
+                walkSegment = first.segment;
+                walkOffset = first.offset + stepNo;
+                walkStepNo = stepNo;
+                walkAnimating = false;
+
+                while (walkOffset > walkSegment.count) {
+                    walkOffset -= walkSegment.count + 1;
+                    walkSegment = segmentNext(walkSegment, highlightFn);
+                }
+
+                moveToWalkPoint('walk-mode');
+                setHash();
+                walkStep();
+            }
+
+            var ringCount = 0;
+            var interiorCount = 0;
+
+            function growGrid() {
+                var rowCount = $('.grid .gr').length;
+
+                $('.progress').css('background-size', (rowCount * 100 / (1 + to.z - from.z)) + '% 100%')
+
+                if (from.z + rowCount > to.z) {
+                    renderingComplete();
+                    return;
+                }
+
+                var grid = document.getElementById('grid');
+                var pathLayer = document.getElementById('path-layer');
+                if (grid == null || pathLayer == null) return;
+
+                var highlightFn = getCurrentHighlightFunction();
+                for (var i = 0; from.z + rowCount + i <= to.z && i < 8; i++) {
+                    var z = from.z + rowCount + i;
+                    var row = document.createElement('div');
+                    row.setAttribute('id', 'path-z' + z);
+                    row.setAttribute('class', 'path-row');
+                    row.setAttribute('style', 'animation-delay: ' + i / 10 + 's');
+                    pathLayer.appendChild(row);
+                    var gridRow = document.createElement('div');
+                    gridRow.setAttribute('class', 'gr z' + z);
+                    gridRow.setAttribute('style', 'animation-delay: ' + i / 10 + 's');
+                    var chunkType = null;
+                    var chunkLen = 0;
+                    var chunk = null;
+                    for (var x = from.x; x <= to.x; x++) {
+                        var point = { x: x, z: z };
+                        var dist = getDistance(center, point);
+                        var type = 'outside';
+                        if (dist < inner) {
+                            type = 'inside';
+                            interiorCount++;
+                        } else if (dist < outer) {
+                            type = 'ring';
+                            ringCount++;
+                        }
+                        if (type != chunkType) {
+                            chunkType = type;
+                            chunkLen = 1;
+                            chunk = document.createElement('span');
+                            chunk.setAttribute('class', 'gchunk ' + type);
+                            gridRow.appendChild(chunk);
+                        } else {
+                            chunkLen++;
+                            chunk.setAttribute('style', 'width: ' + (chunkLen * 100) + 'px');
+                        }
+                        if (highlightFn != null) {
+                            var high = highlightFn(point);
+                            if (high != null) highlightPoint(point, high);
+                        }
+                    }
+                    grid.appendChild(gridRow);
+                }
+                setBlockCountLabel('ring', ringCount);
+                setBlockCountLabel('interior', interiorCount);
+
+                $('.grid .gr').last().one('animationstart', function () { requestAnimationFrame(growGrid) });
+            }
+
+            function setHash() {
+                var newHash = getHash();
+                if (location.hash != newHash) history.pushState(null, '', newHash);
+            }
+            function setHashReplace() {
+                var newHash = getHash();
+                if (location.hash != newHash) history.replaceState(null, '', newHash);
+            }
+
+            function buildCircle() {
+                setHash();
+                center = { x: 0, z: 0 };
+                var points = getPoints();
+                var cxElem = document.getElementById('center_x');
+                var czElem = document.getElementById('center_z');
+                var autoCenter = true;
+                if (cxElem.value != '' && czElem.value != '') {
+                    center = { x: cxElem.valueAsNumber, z: czElem.valueAsNumber };
+                    autoCenter = false;
+                } else if (points.length > 0) {
+                    center = points[0];
+                    var rguess = 0.25; // ideally would use zero, but the formulas are based around it being nonzero. A quarter of a block is necessarily smaller than any actual distance between coordinates that aren't equal to each other, so it works.
+                    var rsquared = 0.0625;
+                    for (var n = 1; n < points.length; n++) {
+                        var pn = points[n];
+                        var vn = vecSub(pn, center);
+                        if (vecSquared(vn) > rsquared) {
+                            var rn = vecDiv(vecMul(vn, rguess), vecMod(vn))
+                            var an = 1.0;
+                            for (var i = 0; i < n; i++) {
+                                var di = vecAdd(vecSub(points[i], pn), rn);
+                                var dsquared = vecSquared(di);
+                                if (dsquared > rsquared) {
+                                    var ai = 1.0 - (dsquared - rsquared) / (2.0 * (vecDot(di, rn) - rsquared));
+                                    if (ai > an) an = ai;
+                                }
+                            }
+                            center = vecSub(pn, vecMul(rn, an));
+                            rguess = an * rguess;
+                            rsquared = rguess * rguess;
+                        }
+                    }
+                }
+
+                var correction = getCorrectionRadius();
+                outer = correction;
+                inner = 0;
+
+                if (points.length > 0) {
+                    var first = getDistance(center, points[0]);
+                    outer = first + correction;
+                    inner = first - correction;
+                    for (var i = 1; i < points.length; i++) {
+                        var dist = getDistance(center, points[i]);
+                        if (outer < dist + correction) outer = dist + correction;
+                        if (inner > dist - correction) inner = dist - correction;
+                    }
+                }
+
+                if (autoCenter) {
+                    $('form').addClass('autocenter');
+                    $('#centerXLabel').text(center.x.toFixed(1)).attr('title', center.x);
+                    $('#centerZLabel').text(center.z.toFixed(1)).attr('title', center.z);
+                    $('#center_x').attr('title', center.x);
+                    $('#center_z').attr('title', center.z);
+                } else {
+                    $('form').removeClass('autocenter');
+                    $('#center_x').removeAttr('title');
+                    $('#center_z').removeAttr('title');
+                }
+
+                $('#innerRadiusLabel').text(inner.toFixed(1)).attr('title', inner);
+                $('#outerRadiusLabel').text(outer.toFixed(1)).attr('title', outer);
+
+                from = {
+                    x: Math.floor(center.x - outer - 1.01),
+                    z: Math.floor(center.z - outer - 1.01),
+                };
+                to = {
+                    x: Math.ceil(center.x + outer + 1.01),
+                    z: Math.ceil(center.z + outer + 1.01),
+                };
+
+                $('#circleHolder').empty();
+                var table = document.createElement('div');
+                table.setAttribute('id', 'grid');
+                table.setAttribute('class', 'grid');
+                document.getElementById('circleHolder').appendChild(table);
+                var pathLayer = document.createElement('div');
+                pathLayer.setAttribute('id', 'path-layer');
+                pathLayer.setAttribute('class', 'path-layer');
+                document.getElementById('circleHolder').appendChild(pathLayer);
+                $('#circleHolder').width((to.x - from.x) * 100 + 110).height((to.z - from.z) * 100 + 110); /* Variables */
+                $('.backdrop').width((to.x - from.x) * 100 + 100).height((to.z - from.z) * 100 + 110); /* Variables */
+
+                overlayCircle(center, 0.3, 'center');
+                overlayCircle(center, inner, 'inner');
+                overlayCircle(center, (inner + outer) / 2, 'mid');
+                overlayCircle(center, outer, 'outer');
+                for (var i = 0; i < points.length; i++) {
+                    overlayCircle(points[i], correction, 'point');
+                }
+                refreshPath();
+                ringCount = 0;
+                interiorCount = 0;
+                setBlockCountLabel('ring', 0);
+                setBlockCountLabel('interior', 0);
+                requestAnimationFrame(growGrid);
+            }
+            function overlayCircle(center, radius, cls) {
+                var relCenter = vecSub(center, from);
+                var circle = document.createElement('div');
+                circle.setAttribute('class', 'circle ' + cls);
+                var top = (relCenter.z - radius) * 100 + 50; /* Variables */
+                var left = (relCenter.x - radius) * 100 + 50; /* Variables */
+                var radpx = (radius * 100) - 5; /* Variables */
+                var style = 'top: ' + top + 'px; left: ' + left + 'px; ';
+                if (radpx > 0) {
+                    style += 'padding: ' + radpx + 'px; ';
+                }
+                circle.setAttribute('style', style);
+                document.getElementById('circleHolder').appendChild(circle);
+            }
+
+            function clearHighlight() {
+                $('.gb').remove();
+                endWalk();
+            }
+            function getCurrentHighlightFunction() {
+                switch (document.forms[0]['highlight'].value) {
+                    case 'exterior': return exteriorHighlight;
+                    case 'outside': return outsideHighlight;
+                    case 'middle': return middleHighlight;
+                    case 'inside': return insideHighlight;
+                    case 'interior': return interiorHighlight;
+                    default: return null;
+                }
+            }
+
+            function highlightPoint(point, type) {
+                var row = document.getElementById('path-z' + point.z);
+                if (row == null) return;
+
+                var id = pointToId(point);
+                var cell = document.getElementById(id);
+                if (cell == null) {
+                    var cell = document.createElement('span');
+                    cell.setAttribute('id', id);
+                    cell.setAttribute('style', 'left: ' + ((point.x - from.x) * 100) + 'px');
+                    row.appendChild(cell);
+                }
+                cell.setAttribute('class', 'gb ' + type);
+            }
+
+            function highlightSegment(segment) {
+                for (var i = 0; i < segment.count; i++) {
+                    var point = segmentPoint(segment, i);
+                    var type = (i == 0 && segment.startIsConnect) ? 'connect' : 'highlight';
+                    highlightPoint(point, type);
+                }
+            }
+
+            function refreshPath() {
+                clearHighlight();
+                var highlightFn = getCurrentHighlightFunction();
+
+                segmentCount = 0;
+                stepCount = 0;
+                var pathBlocks = 0;
+                var connectBlocks = 0;
+
+                var first = findStartSegment(1, highlightFn);
+
+                if (first != null) {
+                    var segment = first.segment;
+                    var minx = segment.start.x;
+                    var minz = segment.start.z; // Actually is the minimum by definition so don't need to look for anything lower
+                    var maxx = minx;
+                    var maxz = minz;
+
+                    while (segmentCount < 4 || !vecEqual(segment.start, first.segment.start)) {
+                        if (segment.start.x < minx) minx = segment.start.x;
+                        if (segment.start.x > maxx) maxx = segment.start.x;
+                        if (segment.start.z > maxz) maxz = segment.start.z;
+                        console.log('stepCount is ' + stepCount);
+
+                        console.log(segmentStr(segment));
+
+                        segmentCount++;
+                        stepCount += 1 + segment.count;
+                        console.log('after segment, stepCount is ' + stepCount);
+
+                        pathBlocks += segment.count;
+                        if (segment.length == 0) pathBlocks--;
+
+                        if (segment.endIsConnect) connectBlocks++;
+
+                        highlightSegment(segment);
+
+                        segment = segmentNext(segment, highlightFn);
+                    }
+                    console.log('final stepCount = ' + stepCount);
+
+                    // Very small circles do funny things due to multiple overlapping, easiest to just count blocks directly in that case
+                    if (maxx - minx <= 4 || maxz - minz <= 4) {
+                        pathBlocks = 0;
+                        connectBlocks = 0;
+                        for (var x = minx; x <= maxx; x++) {
+                            for (var z = minz; z <= maxz; z++) {
+                                var type = highlightFn({x: x, z: z});
+                                if (type != null) pathBlocks++;
+                                if (type == 'connect') connectBlocks++;
+                            }
+                        }
+                    }
+                }
+                setBlockCountLabel('path', pathBlocks);
+                setBlockCountLabel('highlight', pathBlocks - connectBlocks);
+                setBlockCountLabel('connect', connectBlocks);
+            }
+
+            function setBlockCountLabel(type, count) {
+                var container = $('#' + type + '-count');
+                if (count == 0) {
+                    container.hide();
+                } else {
+                    container.show();
+                    $('.block-count', container).text(count);
+                    if (count < 64) {
+                        $('.stacks', container).hide();
+                    } else {
+                        $('.stacks', container).show();
+                        var rem = count % 64;
+                        var stacks = (count - rem) / 64;
+                        $('.stack-count', container).text(stacks);
+                        if (rem == 0) {
+                            $('.rem', container).hide();
+                        } else {
+                            $('.rem', container).show();
+                            $('.stack-rem', container).text(rem);
+                        }
+                    }
+                }
+            }
+
+            function exteriorHighlight(point) {
+                return testSurroundings(point, function (c) { return getDistance(center, c) >= outer });
+            }
+            function outsideHighlight(point) {
+                return testSurroundings(point, function (c) { return getDistance(center, c) < outer });
+            }
+            function middleHighlight(point) {
+                var r = (outer + inner) / 2;
+
+                var off = getDistance(point, center) - r;
+                if (off < -1 || off > 1) return null;
+                if (off == 0) return 'highlight';
+
+                var offN = r - getDistance({ x: point.x, z: point.z - 1 }, center);
+                var offE = r - getDistance({ x: point.x + 1, z: point.z }, center);
+                var offS = r - getDistance({ x: point.x, z: point.z + 1 }, center);
+                var offW = r - getDistance({ x: point.x - 1, z: point.z }, center);
+                if (off > 0) {
+                    if (offN > off || offE > off || offS > off || offW > off) {
+                        return 'highlight';
+                    }
+                } else {
+                    if (offN <= off || offE <= off || offS <= off || offW <= off) {
+                        return 'highlight';
+                    }
+                }
+
+                var offNE = r - getDistance({ x: point.x + 1, z: point.z - 1 }, center);
+                var offSE = r - getDistance({ x: point.x + 1, z: point.z + 1 }, center);
+                var offSW = r - getDistance({ x: point.x - 1, z: point.z + 1 }, center);
+                var offNW = r - getDistance({ x: point.x - 1, z: point.z - 1 }, center);
+
+                if (off > 0) {
+                    if (offNE > off || offSE > off || offSW > off || offNW > off) {
+                        return 'connect';
+                    }
+                } else {
+                    if (offNE <= off || offSE <= off || offSW <= off || offNW <= off) {
+                        return 'connect';
+                    }
+                }
+                return null;
+            }
+
+            function insideHighlight(point) {
+                return testSurroundings(point, function (c) { return getDistance(center, c) >= inner });
+            }
+            function interiorHighlight(point) {
+                return testSurroundings(point, function (c) { return getDistance(center, c) < inner });
+            }
+
+            // 'highlight' if criterion matches but an adjacent pixel doesn't
+            // 'connect' if criterion matches but a diagonally adjacent pixel doesn't
+            // null otherwise (criterion doesn't match, or all surrounding pixels do too)
+            function testSurroundings(coord, criterion) {
+                if (!criterion(coord)) return null;
+
+                if (!criterion({ x: coord.x + 1, z: coord.z }) ||
+                    !criterion({ x: coord.x - 1, z: coord.z }) ||
+                    !criterion({ x: coord.x, z: coord.z + 1 }) ||
+                    !criterion({ x: coord.x, z: coord.z - 1 })) return 'highlight';
+
+                if (!criterion({ x: coord.x + 1, z: coord.z + 1 }) ||
+                    !criterion({ x: coord.x + 1, z: coord.z - 1 }) ||
+                    !criterion({ x: coord.x - 1, z: coord.z + 1 }) ||
+                    !criterion({ x: coord.x - 1, z: coord.z - 1 })) return 'connect';
+
+                return null;
+            }
+
+            var orientationNames = ['east', 'south', 'west', 'north'];
+            var orientations = { East: 0, South: 1, West: 2, North: 3 };
+
+            function orientationVec(orientation) {
+                var isX = (orientation & 1) == 0;
+                var sign = (orientation >= 2) ? -1 : 1;
+                return {x: isX ? sign : 0, z: isX ? 0 : sign};
+            }
+            function orientationDesc(orientation) {
+                var axis = (orientation & 1) == 0 ? 'X' : 'Z';
+                var sign = (orientation >= 2) ? 'negative' : 'positive';
+                return 'toward ' + sign + ' ' + axis;
+            }
+
+            // lr = -1 for left, 1 for right
+            function orientationTurn(orientation, lr) {
+                return (orientation + 4 + lr) % 4;
+            }
+            function orientationReverse(orientation) {
+                return (orientation + 2) % 4;
+            }
+            function orientationMultiply(orientation, factor) {
+                return factor < 0 ? orientationReverse(orientation) : orientation;
+            }
+            function getTurnName(lr) {
+                return lr < 0 ? 'left' : 'right';
+            }
+            function cellCoords(elem) {
+                return idToPoint(elem.getAttribute('id'));
+            }
+
+            // segment is {direction, start, orientation, count, startIsConnect, endIsConnect}
+            function segmentPoint(segment, offset) {
+                return vecAdd(segment.start, vecMul(orientationVec(segment.orientation), offset));
+            }
+            function segmentEnd(segment) {
+                return segmentPoint(segment, segment.count);
+            }
+            function segmentReverse(segment) {
+                return {
+                    direction: -segment.direction,
+                    start: segmentEnd(segment),
+                    orientation: orientationReverse(segment.orientation),
+                    count: segment.count,
+                    startIsConnect: segment.endIsConnect,
+                    endIsConnect: segment.startIsConnect
+                };
+            }
+            function segmentSkip(segment, offset) {
+                return {
+                    direction: segment.direction,
+                    start: segmentPoint(segment, offset),
+                    orientation: segment.orientation,
+                    count: segment.count - offset,
+                    startIsConnect: offset == 0 ? segment.startIsConnect : false,
+                    endIsConnect: segment.endIsConnect,
+                };
+            }
+            function segmentTruncate(segment, count) {
+                return {
+                    direction: segment.direction,
+                    start: segment.start,
+                    orientation: segment.orientation,
+                    count: count,
+                    startIsConnect: segment.startIsConnect,
+                    endIsConnect: count == segment.count ? segment.endIsConnect : false,
+                };
+            }
+
+            // dir is 1 for forward(clockwise) or -1 for backward(anticlockwise)
+            function getQuadrant(dir, point, orientation) {
+                if ((orientation == orientations.North && (point.z == center.z || (point.z < center.z && point.x == center.x))) ||
+                    (dir == -(Math.sign(point.x - center.x)) && (point.z < center.z || (point.z == center.z && orientation == (dir > 0 ? orientations.East : orientations.West)))))
+                    return orientations.North;
+
+                if ((orientation == orientations.East && (point.x == center.x || (point.x > center.x && point.z == center.z))) ||
+                    (dir == -(Math.sign(point.z - center.z)) && (point.x > center.x || (point.x == center.x && orientation == (dir > 0 ? orientations.South : orientations.North)))))
+                    return orientations.East;
+
+                if ((orientation == orientations.West && (point.x == center.x || (point.x < center.x && point.z == center.z))) ||
+                    (dir == Math.sign(point.z - center.z) && (point.x < center.x || (point.x == center.x && orientation == (dir > 0 ? orientations.North : orientations.South)))))
+                    return orientations.West;
+
+                if ((orientation == orientations.South && (point.z == center.z || (point.z > center.z && point.x == center.x))) ||
+                    (dir == Math.sign(point.x - center.x) && (point.z > center.z || (point.z == center.z && orientation == (dir > 0 ? orientations.West : orientations.East)))))
+                    return orientations.South;
+
+                return null;
+            }
+
+            // direction is 1 for forward(clockwise) or -1 for backward(anticlockwise)
+            // start = starting coordinate (at clockwise or anticlockwise end depending on direction)
+            function segmentGet(direction, start, orientation, highlightFn) {
+                var quadrant = getQuadrant(direction, start, orientation);
+
+                // If orientation == quadrant then we're heading 'outish' and only need to look ahead
+                // If orientation != quadrant we're heading 'innish' so we need to look to the outside, which happens to be IN quadrant direction
+                var aheadVec = orientationVec(orientation);
+                var outVec = null;
+                if (orientation != quadrant) outVec = orientationVec(quadrant);
+
+                var point = start;
+                var count = 0;
+
+                while (true) {
+                    if (outVec != null && highlightFn(vecAdd(point, outVec)) != null) break;
+
+                    if (highlightFn(vecAdd(point, aheadVec)) == null) break;
+
+                    count++;
+                    point = vecAdd(point, aheadVec);
+                }
+
+                return {
+                    direction: direction,
+                    start: start,
+                    orientation: orientation,
+                    count: count,
+                    startIsConnect: highlightFn(start) == 'connect',
+                    endIsConnect: highlightFn(point) == 'connect',
+                };
+            }
+
+            function segmentEndTurn(segment) {
+                var endPoint = segmentEnd(segment);
+                if (endPoint.x == center.x || endPoint.z == center.z) endPoint = segment.start;
+                return getQuadrant(segment.direction, endPoint, segment.orientation) == segment.orientation ? segment.direction : -segment.direction;
+            }
+
+            function segmentNext(segment, highlightFn) {
+                var orientation = orientationTurn(segment.orientation, segmentEndTurn(segment));
+                return segmentGet(segment.direction, segmentEnd(segment), orientation, highlightFn);
+            }
+
+            // Direction is 1 for forward(clockwise) or -1 for backward(anticlockwise)
+            // returns {segment, offset}
+            function findStartSegment(direction, highlightFn) {
+                if (highlightFn == null) return null;
+
+                direction = Math.sign(+direction);
+                if (direction == 0) return null;
+
+                var x = Math.floor(center.x + 0.5);
+                var z = Math.ceil(center.z - 0.5);
+
+                while (true) {
+                    var point = highlightFn({ x: x, z: z });
+                    var above = highlightFn({ x: x, z: z - 1 });
+
+                    if (point != null && above == null) break; // Found the top!
+
+                    if (z < from.z) return null; // Didn't find any viable top point
+                    z--;
+                }
+
+                // Move backward to find the start of the segment
+                var offset = 0;
+                while (highlightFn({ x: x - direction * (offset + 1), z: z }) != null) {
+                    offset++;
+                }
+
+                return {
+                    segment: segmentGet(direction, { x: x - direction * offset, z: z }, direction > 0 ? orientations.East : orientations.West, highlightFn),
+                    offset: offset,
+                };
+            }
+
+            // segment is {direction, start, orientation, count, startIsConnect, endIsConnect}
+            function segmentStr(segment) {
+                return (segment.direction > 0 ? 'Clockwise ' : 'Anticlockwise ') +
+                    orientationNames[segment.orientation] + ' from ' + vecStr(segment.start) +
+                    ' for ' + segment.count + ' blocks [' + segment.startIsConnect + '/' + segment.endIsConnect + ']';
+            }
+
+            function segmentDirections(segment) {
+                if (segment.count == 0) return 'Turn around at ' + vecStr(segment.start);
+
+                var orientationName = orientationNames[segment.orientation];
+                orientationName = orientationName.substring(0, 1).toUpperCase() + orientationName.substring(1);
+
+                return orientationName + ' ' + segment.count + ' block' + (segment.count > 1 ? 's' : '') + ' to ' + vecStr(segmentEnd(segment));
+            }
+
+            function getFullDirections(direction, highlightFn) {
+                var directions = [];
+                var first = findStartSegment(direction, highlightFn);
+                if (first == null) return "Can't find a valid path!";
+
+                var segment = first.segment;
+
+                directions.push('Start at ' + vecStr(segmentPoint(segment, first.offset)));
+
+                if (first.offset < segment.count) {
+                    directions.push('0: ' + segmentDirections(segmentSkip(segment, first.offset)));
+                }
+
+                var segNo = 1;
+                while (segNo < 4 || !vecEqual(segmentEnd(segment), first.segment.start)) {
+                    segment = segmentNext(segment, highlightFn);
+                    directions.push(segNo + ': ' + segmentDirections(segment));
+                    segNo++;
+                }
+
+                if (first.offset > 0) {
+                    directions.push(segNo + ': ' + segmentDirections(segmentTruncate(first.segment, first.offset)));
+                }
+
+                return directions.join('\r\n');
+            }
+
+            function setAnimSpeed() {
+                var speed = document.getElementById('speed').valueAsNumber;
+                $('.viewport').removeClass('speed1 speed2 speed3 speed4 speed5 speed6 speed7 speed8 speed9 speed10').addClass('speed' + speed);
+            }
+
+            function moveToWalkPoint(animClass) {
+                setAnimSpeed();
+                var walkPoint = segmentPoint(walkSegment, walkOffset);
+                $('#loctable').css('transform', 'translate(' + (from.x + to.x - walkPoint.x * 2) * 50 + 'px, ' + (from.z + to.z - walkPoint.z * 2) * 50 + 'px)'); /* Variables */
+                $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west');
+                $('.walkpoint').removeClass('walkpoint walkanim');
+                var vpElem = document.getElementById('circleViewport');
+                $('.fading').removeClass('fading');
+                vpElem.offsetWidth = vpElem.offsetWidth; // Force a reflow after removing all the animation classes
+                if (animClass) {
+                    $('.viewport').addClass(animClass);
+                    if (animClass.startsWith('move-') || animClass.startsWith('turn-')) walkAnimating = true;
+                }
+                $('.viewport').addClass('face-' + orientationNames[orientationMultiply(walkSegment.orientation, getWalkFace())]);
+                $('#x' + walkPoint.x + 'z' + walkPoint.z).addClass('walkpoint walkanim');
+
+                if (animClass.startsWith('turn')) {
+                    $('#walkFaceLabel').addClass('fading');
+                } else if ((walkSegment.orientation & 1) != 0) {
+                    $('#walkZLabel').addClass('fading');
+                } else {
+                    $('#walkXLabel').addClass('fading');
+                }
+                if (walkOffset == (getWalkPlayMode() > 0 ? walkSegment.count : 0)) $('#directionLabel').addClass('fading');
+                setHashReplace();
+
+                setFadeText('walkXLabel', walkPoint.x);
+                setFadeText('walkZLabel', walkPoint.z);
+                var orientation = orientationMultiply(walkSegment.orientation, getWalkFace());
+                setFadeHtml('walkFaceLabel', '<strong>' + orientationNames[orientation] + '</strong> (' + orientationDesc(orientation) + ')');
+                setFadeText('directionLabel', segmentDirections(walkOffset >= walkSegment.count ?
+                    segmentNext(walkSegment, getCurrentHighlightFunction()) :
+                    segmentSkip(walkSegment, walkOffset)));
+            }
+
+            function setFadeHtml(id, html) {
+                var current = $('#' + id + ' .fade.current');
+                $('#' + id + ' .fade.previous').html(current.html());
+                current.html(html);
+            }
+            function setFadeText(id, text) {
+                var current = $('#' + id + ' .fade.current');
+                $('#' + id + ' .fade.previous').html(current.html());
+                current.text(text);
+            }
+
+            function getCurrentOrientation() {
+                var vp = $('.viewport');
+                if (vp.hasClass('face-east')) return orientations.East;
+                if (vp.hasClass('face-west')) return orientations.West;
+                if (vp.hasClass('face-south')) return orientations.South;
+                return orientations.North;
+            }
+
+            var walkSegment = null;
+            var walkOffset = 0;
+            var walkStepNo = 0;
+            var walkAnimating = false;
+
+            var segmentCount = 0;
+            var stepCount = 0;
+
+            var pendingSteps = 0;
+
+            function startWalk() {
+                var first = findStartSegment(getWalkDirection(), getCurrentHighlightFunction());
+                if (first == null) return;
+
+                walkSegment = first.segment;
+                walkOffset = first.offset;
+                walkStepNo = 0;
+                walkAnimating = false;
+                setHash();
+
+                moveToWalkPoint('walk-mode');
+                walkStep();
+            }
+
+            function endWalk() {
+                walkSegment = null;
+                walkAnimating = false;
+                $('#loctable').css('transform', 'none');
+                if ($('viewport').hasClass('walk-mode')) $('.viewport').addClass('end-walk');
+                $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west walk-mode');
+                $('.walkpoint').removeClass('walkpoint walkanim');
+                $('.fading').removeClass('fading');
+                setHash();
+            }
+
+            function walkStepAnimationEnd(evt) {
+
+                if (walkSegment == null) return; // We're not walking!
+                var anim = evt.originalEvent.animationName;
+                if (!anim.startsWith('move') && !anim.startsWith('turn')) return;
+
+                walkAnimating = false;
+                walkStep();
+            }
+
+            function walkSingleStep(dir) {
+                if (getWalkPlayMode() != 0) {
+                    pendingSteps = 0;
+                    document.getElementById('pause').checked = true;
+                    setHash();
+                }
+                pendingSteps += dir;
+                walkStep();
+            }
+
+            // 1 for clockwise, -1 for anti
+            function getWalkDirection() {
+                return document.getElementById('walkToolbar').dir.value == 'clockwise' ? 1 : -1;
+            }
+
+            // 1 for play forward, 0 for pause, -1 for play reversed
+            function getWalkPlayMode() {
+                switch (document.getElementById('walkToolbar').playmode.value) {
+                    case 'play-fwd': return 1;
+                    case 'play-rev': return -1;
+                    default: return 0;
+                }
+            }
+
+
+            // 1 for ahead, -1 for behind
+            function getWalkFace() {
+                return document.getElementById('walkToolbar').face.value == 'ahead' ? 1 : -1;
+            }
+
+            function getNextWalkPlayStep() {
+                var mode = getWalkPlayMode();
+                if (mode == 0) {
+                    mode = Math.sign(pendingSteps);
+                    pendingSteps -= mode;
+                }
+                return mode;
+            }
+
+            function triggerWalkStep() {
+                setHash();
+                walkStep();
+            }
+
+            function walkStep() {
+
+                if (walkSegment == null) return;
+                if (walkAnimating) return;
+
+                if (getWalkDirection() != walkSegment.direction) {
+                    walkSegment = segmentReverse(walkSegment);
+                    walkOffset = walkSegment.count - walkOffset;
+                    walkStepNo = stepCount - walkStepNo;
+                }
+
+                if (document.getElementById('3d-mode').checked != $('.viewport').hasClass('view3d')) {
+                    $('.viewport').toggleClass('view3d');
+                }
+
+                if (getCurrentOrientation() == orientationMultiply(walkSegment.orientation, -getWalkFace())) {
+                    moveToWalkPoint('turn-180');
+                    return;
+                }
+
+                var mode = getNextWalkPlayStep();
+                if (mode == 0) return;
+
+                walkStepNo = (walkStepNo + stepCount + mode) % stepCount;
+                walkOffset += mode;
+
+                var anim = 'move-' + orientationNames[orientationMultiply(walkSegment.orientation, mode)];
+
+                if (walkOffset > walkSegment.count) {
+                    anim = 'turn-' + getTurnName(segmentEndTurn(walkSegment));
+                    walkSegment = segmentNext(walkSegment, getCurrentHighlightFunction());
+                    walkOffset = 0;
+                } else if (walkOffset < 0) {
+                    var revSegment = segmentReverse(walkSegment);
+                    anim = 'turn-' + getTurnName(segmentEndTurn(revSegment));
+                    walkSegment = segmentReverse(segmentNext(revSegment, getCurrentHighlightFunction()));
+                    walkOffset = walkSegment.count;
+                }
+
+                moveToWalkPoint(anim);
+            }
+        </script>
+    </head>
+    <body>
+        <div class="controls">
+            <form id="mainForm" onsubmit="return false">
+                <input type="submit" style="display:none" id="validate">
+                <template id="pointTemplate">
+                    <div class="pointrow">
+                        <input class="pointx" type="number" placeholder="X">
+                        <input class="pointz" type="number" placeholder="Z">
+                    </div>
+                </template>
+                <div class="column">
+                    <div>
+                        Center:
+                        <input type="number" step="0.5" id="center_x" placeholder="X">
+                        <input type="number" step="0.5" id="center_z" placeholder="Z">
+                    </div>
+                    <div class="radiolist">
+                        <span class="radiolabel">Point Size:</span>
+                        <div class="itemwrapper">
+                            <div class="items">
+                                <label><input type="radio" name="correction" value="point" id="correction_point">Point</label>
+                                <label><input type="radio" name="correction" value="inside" id="correction_inside">Inside</label>
+                                <label><input type="radio" name="correction" value="area" id="correction_area" checked>Area</label>
+                                <label><input type="radio" name="correction" value="outside" id="correction_outside">Outside</label>
+                                <label>
+                                    <input type="radio" name="correction" value="custom" id="correction_custom">Custom
+                                    <input type="number" min="0" step="any" id="correction_radius">
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="radiolist">
+                        <span class="radiolabel">Path:</span>
+                        <div class="itemwrapper">
+                            <div class="items">
+                                <label><input type="radio" name="highlight" value="" checked id="highlight_none">None</label>
+                                <label><input type="radio" name="highlight" value="exterior" id="highlight_exterior">Exterior</label>
+                                <label><input type="radio" name="highlight" value="outside" id="highlight_outside">Outside</label>
+                                <label><input type="radio" name="highlight" value="middle" id="highlight_middle">Middle</label>
+                                <label><input type="radio" name="highlight" value="inside" id="highlight_inside">Inside</label>
+                                <label><input type="radio" name="highlight" value="interior" id="highlight_interior">Interior</label>
+                            </div>
+                        </div>
+                        <button type="button" id="walk">Walk</button>
+                    </div>
+                    <div class="progress">
+                        <span class="centerlabel">C: X<span id='centerXLabel'></span>,Z<span id='centerZLabel'></span></span>
+                        R: <span id='innerRadiusLabel'></span>-<span id='outerRadiusLabel'></span>
+                    </div>
+                    <div id="ring-count">
+                        <span class="count-label">Ring:</span>
+                        <span class="block-count"></span><span class="ring-block block"></span>
+                        <span class="stacks">
+                            (<span class="stack-count"></span><span class="ring-block stack"></span>
+                            <span class="rem"> + <span class="stack-rem"></span><span class="ring-block block"></span></span>)
+                        </span>
+                    </div>
+                    <div id="interior-count">
+                        <span class="count-label">Interior:</span>
+                        <span class="block-count"></span><span class="interior-block block"></span>
+                        <span class="stacks">
+                            (<span class="stack-count"></span><span class="interior-block stack"></span>
+                            <span class="rem"> + <span class="stack-rem"></span><span class="interior-block block"></span></span>)
+                        </span>
+                    </div>
+                    <div id="path-count">
+                        <span class="count-label">Path:</span>
+                        <span class="block-count"></span><span class="path-block block"></span>
+                        <span class="stacks">
+                            (<span class="stack-count"></span><span class="path-block stack"></span>
+                            <span class="rem"> + <span class="stack-rem"></span><span class="path-block block"></span></span>)
+                        </span>
+                    </div>
+                    <div>
+                        <span id="highlight-count">
+                            <span class="block-count"></span><span class="highlight-block block"></span>
+                            <span class="stacks">
+                                (<span class="stack-count"></span><span class="highlight-block stack"></span>
+                                <span class="rem"> + <span class="stack-rem"></span><span class="highlight-block block"></span></span>)
+                            </span>
+                        </span>
+                        <span id="connect-count">
+                            <span class="block-count"></span><span class="connect-block block"></span>
+                            <span class="stacks">
+                                (<span class="stack-count"></span><span class="connect-block stack"></span>
+                                <span class="rem"> + <span class="stack-rem"></span><span class="connect-block block"></span></span>)
+                            </span>
+                        </span>
+                    </div>
+                </div>
+                <div class="column pointscol">
+                    Points:
+                    <div id="pointsList"></div>
+                </div>
+            </form>
+        </div>
+        <div id="circleViewport" class="viewport">
+            <div class="sky walkanim"></div>
+            <div class="walk-info">
+                <form class="walk-toolbar" id="walkToolbar">
+                    <span class="walk-toolbar-grp">
+                        <span class="tool-button trigger big" title="Reverse play">
+                            <input id="play-rev" type="radio" name="playmode" value="play-rev" />
+                            <label for="play-rev">&#x25c0;</label>
+                        </span>
+                        <span class="tool-button trigger" id="step-rev" title="Step back">&#x23ef;</span>
+                        <span class="tool-button" title="Pause">
+                            <input id="pause" type="radio" name="playmode" value="pause" />
+                            <label for="pause">&#x23f8;</label>
+                        </span>
+                        <span class="tool-button trigger" id="step-fwd" title="Step forward">&#x23ef;</span>
+                        <span class="tool-button trigger big" title="Play">
+                            <input id="play-fwd" type="radio" name="playmode" value="play-fwd" checked />
+                            <label for="play-fwd">&#x25b6;</label>
+                        </span>
+                    </span>
+                    <span class="walk-toolbar-grp">
+                        <span class="tool-button trigger" title="Clockwise">
+                            <input id="dir-clockwise" type="radio" name="dir" value="clockwise" checked />
+                            <label for="dir-clockwise">&#x21bb;</label>
+                        </span>
+                        <span class="tool-button trigger" title="Anticlockwise">
+                            <input id="dir-anticlockwise" type="radio" name="dir" value="anticlockwise" />
+                            <label for="dir-anticlockwise">&#x21ba;</label>
+                        </span>
+                    </span>
+                    <span class="walk-toolbar-grp">
+                        <span class="tool-button trigger" title="Face ahead">
+                            <input id="face-ahead" type="radio" name="face" value="ahead" checked />
+                            <label for="face-ahead">&#x21e7;</label>
+                        </span>
+                        <span class="tool-button trigger" title="Face behind">
+                            <input id="face-behind" type="radio" name="face" value="behind" />
+                            <label for="face-behind">&#x21e9;</label>
+                        </span>
+                    </span>
+                    <span class="tool-button trigger" title="3D Mode">
+                        <input id="3d-mode" type="checkbox" name="3d-mode" />
+                        <label for="3d-mode">&#x23e2;</label>
+                    </span>
+                    <span class="tool-slider" title="Speed">
+                        <input id="speed" type="range" min="1" max="10" name="speed" value="7" />
+                    </span>
+                    <span class="tool-button" id="exit-walk" title="Exit walk">&#x2716;</span>
+                </form>
+                <div class="walk-directionbar">
+                    <div class="walk-direction fade-box" id="directionLabel"><span class="fade current"></span><span class="fade previous"></span></div>
+                </div>
+                <div class="walk-location">
+                    <div class="walk-coord fade-box" id="walkXLabel"><span class="walk-label">X:</span> <strong class="fade current"></strong><strong class="fade previous"></strong></div>
+                    <div class="walk-coord fade-box" id="walkZLabel"><span class="walk-label">Z:</span> <strong class="fade current"></strong><strong class="fade previous"></strong></div>
+                    <div class="walk-face fade-box" id="walkFaceLabel"><span class="walk-label">Facing:</span> <span class="fade current"></span><span class="fade previous"></span></div>
+                </div>
+            </div>
+            <div class="window">
+                <div id="backtable" class="table">
+                    <div class="backdrop">
+                        <div id="tilttable" class="table walkanim">
+                            <div id="facetable" class="table">
+                                <div id="turntable" class="table walkanim">
+                                    <div id="loctable" class="table">
+                                        <div id="movetable" class="table walkanim">
+                                            <div id="circleHolder" class="gridholder"></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </body>
+</html>
