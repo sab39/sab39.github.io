@@ -4,22 +4,54 @@
         <meta charset="UTF-8">
         <!--
         TODO
-  - Try using CSS variables for block size in px
-  - Use NxN block chunks (N=16? but test perf of different sizes. 16 is cute but something smaller may be needed)
-  - Create chunks in path layer on as-needed basis (and make entire path upfront)
-  - Path chunks and grid chunks have separate parents
-  - Current step flash block is entirely separate and overlaid like the circles, animating from transparent to white and back (in 3d mode start animating upward at peak of whiteness and don't come back down)
-  - Flash block animation repeats indefinitely but new flash block created on new step; on flash animation end old flash block is removed if it's no longer current. Flash animation duration .75s independent of step speed.
-  - vgrid and hgrid classes correspond to background-image with repeating-linear-gradient producing grid lines
-  - For each grid chunk determine which type is used most (heuristic by what is at center and whether ring thickness >5 blocks)
-  - Each grid chunk starts with <most used>-colored vgrid and then transparent hgrid, then has horizontal bars for contiguous areas of other color
-  - Grid chunk bar size doesn't include border and they have hgrid style
-  - Path chunks use a bar per segment (and one separate cell for connect if needed) and use hgrid/vgrid style as required
-  - Path chunk segments have black border edges
-  - Grid chunks are created the way gr rows are now by growGrid method.
-  - growGrid grows both grid and path layers in parallel in similar ways. Refreshing the path re-triggers growGrid but it knows the grid is fully built already so skips that part.
-  - Grid and path both get a class added to indicate being fully rendered (used in particular to remove shaded loading background entirely)
-  - In walk mode MAYBE hide all chunks that are further than a certain distance from the current walk point, but test to see if that's actually needed
+
+- .blocks.across and .blocks.down classes get grid 'gradient' backgrounds alternating transparent and black, 'to right' and 'to bottom' respectively
+- .blocks class gets width and height calculated based on --rows and --cols custom properties (--<rows/cols> * --block-size - --block-border)
+- viewport gets --fromx and --fromz custom properties set
+- .blocks class also gets top and left calculated based on --x and --z custom properties ((--x - --fromx) * --block-size)
+- .blocks.across gets --rows: 1 and .blocks.down gets --cols: 1 by default
+- calculation is --rows * --block-size - --block-border
+- entire grid has .blocks, --rows and --cols set, 'outside' background color and a border; inside that there's a layer with .blocks.across and --rows: inherit, then a layer with .blocks.down and --cols: inherit
+  - but no x or z so the top/left don't apply
+- Then we loop adding the ring and inner with .blocks.across, --x, --z, --cols
+- Then we loop adding segments; single-block segments for 'connect' at start and end as needed and long segments for 'highlight'; skip a segment if length is 1 and previous segment was not skipped
+- Probably no need for growGrid; with this algorithm we can make the whole grid in one shot even for big circles
+  (for r=1000 we have max 6000 ring/inside bars and ~4000 path segments; previously for r=100 we had 10000 single grid blocks)
+  (this algorithm has the number of elements proportional to R (specifically about 10*R) rather than to R^2 which is very nice!)
+- Segments have outline rather than border so that position is right
+- Circles have a --radius property, padding is calculated as (--radius * --block-size - --block-border/2)
+- Walk Step Flash is in another layer after that
+    - Also used for highlighting a square on hover and click-to-set-point
+    - Flash animation is infinite-repeat, but
+        - animation iteration event removes block entirely if it's no longer the current one
+        - step event creates a new one if there isn't one OR if the existing one isn't at the right coords
+    - Flashing square gets X/Z coords in a bubble to top/right of it (independent of actual direction) (use :last-of-type or something so it only shows up for real current one)
+- Layers:
+  - Grid border/outside bg
+  - Grid across
+  - Grid down
+  - Ring/inside
+  - Circle shadows
+  - Path
+  - Circles
+    - Circles still have their own shadows as well as the ones rendered below - need to contrast with Path
+  - Walk Step Flash / Hover Highlight
+  (Crosshairs for walk are outside the grid because they need to be immune to movetable/turntable animation)
+- Coordinate labels around perimeter positioned outside grid and have their own transforms to keep them upright during spins (and possibly even flat during 3d tilt)
+- JS only ever sets --fromx, --fromz, --x, --z, --rows, --cols, --radius; never does pixel calculations
+- Fix positioning of "Facing" in Chrome
+- Fix incorrect z-ordering when facing != east in chrome
+- Fix screwy circle shadows when facing != north in Firefox
+  - Try rotating the circles back to north
+  - Worst case just remove inner shadows when facing != north and not moving
+  - If all else fails put the circle layer outside the effect of the rotation tables, but that's tricky as the turn tables are in the middle of other transforms that the circles ARE susceptible to
+
+- Add the ability to render only part of the grid:
+    - Possibly put overflow: hidden on circle layer if in this mode
+    - In walk and/or 3D mode render only a limited area (20 block radius?) around the current coordinate
+    - Re-render (at the end of an animation step before starting the next one) any time the current coordinate gets within a certain distance (10 block radius?) of the edge of the rendered area
+    - Complicated algorithm for guessing the most common block type within a given area
+
   - Change loadFromHash to no longer treat part of the url being missing/invalid as 'leave unchanged', but rather as 'reset to default'
   - Change loadFromHash so that if the circle parameters aren't changed it knows not to rerender; if the path choice is unchanged it knows not to refresh the path; if we're already in walk mode it knows not to exit and re-enter it
   - Change loadFromHash so that if the walk choices (fwd/rev/pause, clockwise/anti, ahead/behind, 3d, speed) are all that's changed then it simply changes the form controls' state and calls triggerWalkStep to pick up the changes
@@ -70,7 +102,61 @@
         <title>Stuart's M---craft Overcomplicated Circle Kit</title>
         <style type="text/css">
             body {
-                background: linear-gradient(to bottom, black, #333);
+                --block-border: 4px;
+                --block-size: calc(var(--block-border) * 10);
+
+                --scale-normal: 0.25;
+                --scale-walk: 1;
+                --scale-walk3d: 2;
+
+                --gridline-colour: black;
+                --outside-colour: #686;
+                --ring-colour: #333;
+                --inside-colour: #af8;
+                --path-colour: blue;
+                --path-connect-colour: purple;
+                --flash-colour: white;
+                --point-border-colour: red;
+                --point-fill-colour: rgba(255, 0, 0, 0.3);
+                --centre-border-colour: black;
+                --centre-fill-colour: green;
+                --inner-circle-colour: magenta;
+                --mid-circle-colour: purple;
+                --outer-circle-colour: blue;
+                --sky-gradient: linear-gradient(to left, #f8bd17 30%, #b6ebf5, #83e5f7, #0c2174 70%);
+                --ui-bg-gradient: linear-gradient(to bottom, black, #333);
+                --ui-panel-bg-gradient: linear-gradient(to right, #444, #666);
+                --ui-text-colour: #ccc;
+                --ui-sky-text-colour: black;
+                --ui-frame-colour: #333;
+                --ui-button-bg-colour: var(--ui-frame-colour);
+                --ui-button-selected-bg-colour: var(--path-colour);
+                --ui-button-hover-bg-colour: var(--path-connect-colour);
+                --ui-button-fg-colour: var(--ui-text-colour);
+                --ui-button-selected-fg-colour: white;
+            }
+
+            /* Speeds 1-10 consisting of 1=4s, 2=3.5s, 3=3s, 4=2.5s, 5=2s, 6=1.5s, 7=1.25s, 8=1s, 9=0.75s, 10=0.5s */
+            /* Halfstep really ought to be calc'd but apparently that's not supported */
+            .viewport.speed1 { --steptime: 4s; --halfstep: 2s; }
+            .viewport.speed2 { --steptime: 3.5s; --halfstep: 1.75s; }
+            .viewport.speed3 { --steptime: 3s; --halfstep: 1.5s; }
+            .viewport.speed4 { --steptime: 2.5s; --halfstep: 1.25s; }
+            .viewport.speed5 { --steptime: 2s; --halfstep: 1s; }
+            .viewport.speed6 { --steptime: 1.5s; --halfstep: 0.75s; }
+            .viewport.speed7 { --steptime: 1.25s; --halfstep: 0.625s; }
+            .viewport.speed8 { --steptime: 1s; --halfstep: 0.5s; }
+            .viewport.speed9 { --steptime: 0.75s; --halfstep: 0.375s; }
+            .viewport.speed10 { --steptime: 0.5s; --halfstep: 0.25s; }
+
+            /* We don't want the flash speed to slow all the way down at slower step speeds */
+            .viewport.speed1, .viewport.speed3 { --flashtime: 1s; }
+            .viewport.speed2 { --flashtime: 1.2s; }
+            .viewport.speed4, .viewport.speed5, .viewport.speed6 { --flashtime: var(--halfstep); }
+            .viewport { --flashtime: var(--steptime); }
+
+            body {
+                background: var(--ui-bg-gradient);
                 background-size: auto 250px;
             }
 
@@ -86,9 +172,9 @@
             }
 
             .column {
-                background: linear-gradient(to right, #444, #666);
+                background: var(--ui-panel-bg-gradient);
                 padding: 10px;
-                color: #ccc;
+                color: var(--ui-text-colour);
                 float: left;
                 height: 210px;
                 width: 18em;
@@ -127,7 +213,7 @@
                 padding: 5px;
                 padding-right: 20px;
                 border-radius: 3px;
-                background-color: #777;
+                background-color: var(--ui-button-bg-colour);
             }
             .radiolist label {
                 display: block;
@@ -143,32 +229,51 @@
 
             span.block, span.stack {
                 display: inline-block;
-                border: 1px solid black;
+                border: 1px solid var(--gridline-colour);
                 width: 10px;
                 height: 10px;
                 margin-right: 1px;
                 margin-left: 2px;
+                background: var(--block-colour);
+                --stack-colour: var(--block-colour);
             }
             span.stack {
                 position: relative;
                 top: -2px;
                 left: -2px;
-                box-shadow: 2px 2px 0px -1px #555, 2px 2px black, 4px 4px 0px -1px #555, 4px 4px black;
+                box-shadow: 2px 2px 0px -1px var(--stack-colour),
+                     2px 2px var(--gridline-colour),
+                     4px 4px 0px -1px var(--block-colour),
+                     4px 4px var(--gridline-colour);
                 margin-right: 3px;
             }
-            span.path-block {
-                background: linear-gradient(45deg, blue, blue 50%, purple 51%, purple)
+            span.block.path-block, span.stack.path-block {
+                background: linear-gradient(45deg, var(--path-colour), var(--path-colour) 50%, var(--path-connect-colour) 50%, var(--path-connect-colour));
+                --block-colour: var(--path-colour);
+                --stack-colour: var(--path-connect-colour);
+            }
+            span.interior-block {
+                --block-colour: var(--inside-colour);
+            }
+            span.ring-block {
+                --block-colour: var(--ring-colour);
+            }
+            span.highlight-block {
+                --block-colour: var(--path-colour);
+            }
+            span.connect-block {
+                --block-colour: var(--path-connect-colour);
             }
 
             div.progress {
-                background: linear-gradient(to right, #444, #777);
+                background: var(--ui-panel-bg-gradient);
                 background-position: left;
                 background-repeat: no-repeat;
             }
 
             .grid {
-                border-left: 10px solid black; /* Variable */
-                border-top: 10px solid black; /* Variable */
+                border-left: var(--block-border) solid var(--gridline-colour); /* Variable */
+                border-top: var(--block-border) solid var(--gridline-colour); /* Variable */
             }
 
             @keyframes rowin {
@@ -179,24 +284,28 @@
 
             div.gr, div.path-row {
                 width: 100%;
-                height: 90px; /* Variable */
+                height: calc(var(--block-size) - var(--block-border)); /* Variable */
                 line-height: 1px;
                 animation-name: rowin;
                 animation-duration: 0.5s;
                 animation-fill-mode: backwards;
-                padding-bottom: 10px; /* Variable */
+                padding-bottom: var(--block-border); /* Variable */
                 position: relative;
             }
             div.gr {
-                background-color: black;
+                background-color: var(--gridline-colour);
             }
 
             span.gchunk {
-                background-image: repeating-linear-gradient(to right, rgba(0,0,0,0), rgba(0,0,0,0) 90px, black 90px, black 100px);
+                background-image: repeating-linear-gradient(to right,
+                    var(--block-colour),
+                    var(--block-colour) calc(var(--block-size) - var(--block-border)),
+                    var(--gridline-colour) calc(var(--block-size) - var(--block-border)),
+                    var(--gridline-colour) var(--block-size));
                 display: inline-block;
                 vertical-align: top;
-                width: 100px; /* Variable */ /* Gets overridden by inline style */
-                height: 90px; /* Variable */
+                width: var(--block-size); /* Variable */ /* Gets overridden by inline style */
+                height: calc(var(--block-size) - var(--block-border)); /* Variable */
                 padding: 0px;
                 margin: 0px;
             }
@@ -205,66 +314,53 @@
                 position: absolute;
                 display: block;
                 top: 0px;
-                width: 90px; /* Variable */
-                height: 90px; /* Variable */
+                width: calc(var(--block-size) - var(--block-border)); /* Variable */
+                height: calc(var(--block-size) - var(--block-border)); /* Variable */
                 padding: 0px;
                 margin: 0px;
+                background-color: var(--block-colour);
             }
 
             .gchunk.inside, .interior-block {
-                background-color: #af8;
-            }
-            span.interior-block.stack {
-                box-shadow: 2px 2px 0px -1px #af8, 2px 2px black, 4px 4px 0px -1px #af8, 4px 4px black;
+                --block-colour: var(--inside-colour);
             }
 
             .gchunk.ring, .ring-block {
-                background-color: #333;
-            }
-            span.ring-block.stack {
-                box-shadow: 2px 2px 0px -1px #333, 2px 2px black, 4px 4px 0px -1px #333, 4px 4px black;
+                --block-colour: var(--ring-colour);
             }
 
             .gchunk.outside {
-                background-color: #686;
+                --block-colour: var(--outside-colour);
             }
 
             .gb.highlight, .highlight-block {
-                background-color: blue;
-            }
-            span.highlight-block.stack {
-                box-shadow: 2px 2px 0px -1px blue, 2px 2px black, 4px 4px 0px -1px blue, 4px 4px black;
+                --block-colour: var(--path-colour);
             }
 
             .gb.connect, .connect-block {
-                background-color: purple;
-            }
-            span.connect-block.stack {
-                box-shadow: 2px 2px 0px -1px purple, 2px 2px black, 4px 4px 0px -1px purple, 4px 4px black;
-            }
-
-            span.path-block.stack {
-                box-shadow: 2px 2px 0px -1px purple, 2px 2px black, 4px 4px 0px -1px blue, 4px 4px black;
+                --block-colour: var(--path-connect-colour);
             }
 
             @keyframes flash {
                 50% {
-                    background-color: white;
+                    background-color: var(--flash-colour);
                 }
             }
             .gb.walkpoint {
                 animation-name: flash;
+                animation-duration: var(--flashtime);
+                animation-iteration-count: 4;
             }
 
             .gridholder {
                 position: relative;
                 background: repeating-linear-gradient(to right bottom, #555, #aaa, #555, #aaa, #555);
-                background-size: 200px 200px;
+                background-size: calc(var(--block-size) * 2) calc(var(--block-size) * 2);
             }
             .path-layer {
                 position: absolute;
-                top: 10px;
-                left: 10px;
+                top: var(--block-border);
+                left: var(--block-border);
                 bottom: 0px;
                 right: 0px;
             }
@@ -275,15 +371,15 @@
                 }
 
                 60% {
-                    border-width: 10px;
+                    border-width: var(--block-border);
                     margin-left: 0px;
                     margin-top: 0px;
                 }
 
                 80% {
-                    border-width: 30px;
-                    margin-left: -20px;
-                    margin-top: -20px;
+                    border-width: calc(var(--block-border) * 3);
+                    margin-left: calc(var(--block-border) * -2);
+                    margin-top: calc(var(--block-border) * -2);
                     transform: scale(1.02);
                 }
             }
@@ -293,32 +389,33 @@
                 pointer-events: none;
                 width: 0px;
                 height: 0px;
-                border: 10px solid black; /* Variable */
+                border: var(--block-border) solid var(--gridline-colour); /* Variable */
                 border-radius: 50%;
                 animation-name: circlein;
                 animation-duration: 1s;
-                box-shadow: 0 0 20px black, inset 0 0 20px black;
+                box-shadow: 0 0 calc(var(--block-border) * 2) black, inset 0 0 calc(var(--block-border) * 2) black;
             }
 
             .circle.center {
-                background-color: green;
+                border-color: var(--centre-border-colour);
+                background-color: var(--centre-fill-colour);
             }
 
             .circle.point {
-                border-color: red;
-                background-color: rgba(255, 0, 0, 0.3);
+                border-color: var(--point-border-colour);
+                background-color: var(--point-fill-colour);
             }
 
             .circle.inner {
-                border-color: magenta;
+                border-color: var(--inner-circle-colour);
             }
 
             .circle.mid {
-                border-color: purple;
+                border-color: var(--mid-circle-colour);
             }
 
             .circle.outer {
-                border-color: blue;
+                border-color: var(--outer-circle-colour);
             }
 
             .viewport {
@@ -336,7 +433,7 @@
                 right: -100%;
                 bottom: -100%;
                 padding: 100%;
-                background: linear-gradient(to left, #f8bd17 30%, #b6ebf5, #83e5f7, #0c2174 70%);
+                background: var(--sky-gradient);
                 background-size: 140% 140%;
                 background-position: center;
             }
@@ -433,22 +530,22 @@
 
             @keyframes movenorth {
                 from {
-                    transform: translate(0, -100px); /* Variable */
+                    transform: translate(0, calc(var(--block-size) * -1)); /* Variable */
                 }
             }
             @keyframes moveeast {
                 from {
-                    transform: translate(100px, 0); /* Variable */
+                    transform: translate(var(--block-size), 0); /* Variable */
                 }
             }
             @keyframes movesouth {
                 from {
-                    transform: translate(0, 100px); /* Variable */
+                    transform: translate(0, var(--block-size)); /* Variable */
                 }
             }
             @keyframes movewest {
                 from {
-                    transform: translate(-100px, 0); /* Variable */
+                    transform: translate(calc(var(--block-size) * -1), 0); /* Variable */
                 }
             }
 
@@ -526,7 +623,7 @@
                 position: absolute;
                 top: -77px;
                 width: 100%;
-                border-bottom: 2px solid #333;
+                border-bottom: 2px solid var(--ui-frame-colour);
                 overflow: hidden;
             }
             @keyframes walkinfoin {
@@ -545,7 +642,7 @@
 
             .walk-toolbar {
                 vertical-align: top;
-                background-color: #333;
+                background-color: var(--ui-frame-colour);
                 padding-bottom: 1px;
             }
             .walk-toolbar-grp {
@@ -562,24 +659,26 @@
                 display: none;
             }
             .tool-button input:checked + label {
-                background: blue;
-                color: white;
+                background: var(--ui-button-selected-bg-colour);
+                color: var(--ui-button-selected-fg-colour);
                 width: 20px;
                 display: inline-block;
                 font-weight: bold;
             }
             .tool-button {
-                border: 1px solid #333;
-                color: #ccc;
+                border: 1px solid var(--ui-frame-colour);
+                color: var(--ui-button-fg-colour);
+                background-color: var(--ui-button-bg-colour);
                 width: 20px;
                 display: inline-block;
                 cursor: default;
                 text-align: center;
                 vertical-align: top;
                 line-height: 25px;
+                font-family: 'Segoe UI Symbol';
             }
             .tool-button:hover, .tool-button:hover input[type='checkbox']:checked + label {
-                background-color: purple;
+                background-color: var(--ui-button-hover-bg-colour);
             }
             .tool-slider input {
                 vertical-align: top;
@@ -587,10 +686,10 @@
                 height: 20px;
             }
             .tool-slider input::-moz-range-thumb {
-                background-color: blue;
+                background-color: var(--ui-button-selected-bg-colour);
             }
             .tool-slider input::-moz-range-thumb:hover {
-                background-color: purple;
+                background-color: var(--ui-button-hover-bg-colour);
             }
             #exit-walk {
                 float: right;
@@ -602,13 +701,13 @@
                 margin-left: auto;
                 margin-right: auto;
                 overflow: hidden;
-                border-left: 2px solid #333;
-                border-right: 2px solid #333;
+                border-left: 2px solid var(--ui-frame-colour);
+                border-right: 2px solid var(--ui-frame-colour);
                 position: relative;
             }
             .walk-directionbar {
                 height: 23px;
-                border-bottom: 2px solid #333;
+                border-bottom: 2px solid var(--ui-frame-colour);
             }
 
             @keyframes upfading {
@@ -657,26 +756,28 @@
             }
             .viewport.walk-info > span {
                 height: 23px;
-                border-left: 1px solid black;
-                border-right: 1px solid black;
+                border-left: 1px solid var(--ui-frame-colour);
+                border-right: 1px solid var(--ui-frame-colour);
                 padding: 0px 5px;
             }
             .walk-label {
                 height: 21px;
-                background-color: #333;
-                color: #ccc;
+                background-color: var(--ui-frame-colour);
+                color: var(--ui-text-colour);
                 padding: 1px 5px;
             }
             .walk-direction {
                 width: 34em;
                 height: 25px;
+                color: var(--ui-sky-text-colour);
             }
             .walk-direction .fade {
                 width: 34em;
                 text-align: center;
             }
             .walk-coord {
-                 width: calc(6em + 10px);
+                width: calc(6em + 10px);
+                color: var(--ui-sky-text-colour);
             }
             .walk-coord .walk-label {
                 width: 1em;
@@ -687,6 +788,9 @@
             }
             .walk-face .walk-label {
                 width: 5em;
+            }
+            .walk-face {
+                color: var(--ui-sky-text-colour);
             }
             .walk-face .fade {
                 width: 14em;
@@ -699,10 +803,10 @@
                 padding: 20px;
             }
             .viewport:not(.walk-mode) .backdrop {
-                transform: translate(-50%, -50%) scale(0.1) translate(50%, 50%);
+                transform: translate(-50%, -50%) scale(var(--scale-normal)) translate(50%, 50%);
             }
             .viewport.walk-mode .backdrop {
-                transform: translate(-50%, -50%) scale(0.4);
+                transform: translate(-50%, -50%) scale(var(--scale-walk));
             }
             .viewport.walk-mode #backtable {
                 transform: translate(50%, 25%);
@@ -712,22 +816,22 @@
                 transform-style: preserve-3d;
             }
             .viewport.walk-mode.view3d .backdrop {
-                transform: translate(-50%, -50%) scale(0.8);
+                transform: translate(-50%, -50%) scale(var(--scale-walk3d));
             }
             .viewport.walk-mode.view3d #backtable {
-                perspective: 1000px; /* Variable? */
+                perspective: 500px;
                 perspective-origin: 0% 50%;
             }
             .viewport.walk-mode.view3d #tilttable {
-                transform: translateZ(-200px) rotateX(40deg); /* Variable */
+                transform: translateZ(calc(-1 * var(--block-size))) rotateX(40deg); /* Variable */
             }
             .viewport.walk-mode.view3d.turn-right #tilttable, .viewport.walk-mode.view3d.turn-left #tilttable, .viewport.walk-mode.view3d.turn-180 #tilttable {
                 animation-name: glance-down;
             }
             @keyframes bounce3d {
                 50% {
-                    background-color: white;
-                    transform: translateZ(20px); /* Variable */
+                    background-color: var(--flash-colour);
+                    transform: translateZ(calc(2 * var(--block-border))); /* Variable */
                 }
             }
             .viewport.view3d .gridholder {
@@ -740,64 +844,27 @@
                 animation-name: bounce3d;
             }
             .viewport.view3d .path-layer {
-                transform: translateZ(10px); /* Variable */
+                transform: translateZ(var(--block-border)); /* Variable */
             }
             .viewport.view3d .circle {
-                transform: translateZ(20px); /* Variable */
+                transform: translateZ(var(--block-border)); /* Variable */
             }
 
             @keyframes glance-down {
                 30% {
-                    transform: translate3d(0, 0, -200px) rotateX(30deg) translate3d(0, 100px, 0); /* Variable x2 */
+                    transform: translate3d(0, 0, calc(-1 * var(--block-size))) rotateX(30deg) translate3d(0, calc(0.5 * var(--block-size)), 0); /* Variable x2 */
                 }
                 70% {
-                    transform: translate3d(0, 0, -200px) rotateX(30deg) translate3d(0, 100px, 0); /* Variable x2 */
+                    transform: translate3d(0, 0, calc(-1 * var(--block-size))) rotateX(30deg) translate3d(0, calc(0.5 * var(--block-size)), 0); /* Variable x2 */
                 }
             }
 
-            /* Speeds 1-10 consisting of 1=4s, 2=3.5s, 3=3s, 4=2.5s, 5=2s, 6=1.5s, 7=1.25s, 8=1s, 9=0.75s, 10=0.5s */
-            .viewport.speed1 .walkanim { animation-duration: 4s; }
-            .viewport.speed1 .fade { animation-duration: 2s; } /* Fading is half the time of everything else */
-            .viewport.speed1 .walk-direction .fade { animation-delay: 2s; }
+            .viewport .walkanim { animation-duration: var(--steptime); }
+            .viewport .fade { animation-duration: var(--halfstep); } /* Fading is half the time of everything else */
+            .viewport .walk-direction .fade { animation-delay: var(--halfstep); }
 
-            .viewport.speed2 .walkanim { animation-duration: 3.5s; }
-            .viewport.speed2 .fade { animation-duration: 1.75s; } /* Fading is half the time of everything else */
-            .viewport.speed2 .walk-direction .fade { animation-delay: 1.75s; }
-            
-            .viewport.speed3 .walkanim { animation-duration: 3s; }
-            .viewport.speed3 .fade { animation-duration: 1.5s; } /* Fading is half the time of everything else */
-            .viewport.speed3 .walk-direction .fade { animation-delay: 1.5s; }
-            
-            .viewport.speed4 .walkanim { animation-duration: 2.5s; }
-            .viewport.speed4 .fade { animation-duration: 1.25s; } /* Fading is half the time of everything else */
-            .viewport.speed4 .walk-direction .fade { animation-delay: 1.25s; }
-            
-            .viewport.speed5 .walkanim { animation-duration: 2s; }
-            .viewport.speed5 .fade { animation-duration: 1s; } /* Fading is half the time of everything else */
-            .viewport.speed5 .walk-direction .fade { animation-delay: 1s; }
-            
-            .viewport.speed6 .walkanim { animation-duration: 1.5s; }
-            .viewport.speed6 .fade { animation-duration: 0.75s; } /* Fading is half the time of everything else */
-            .viewport.speed6 .walk-direction .fade { animation-delay: 0.75s; }
-            
-            .viewport.speed7 .walkanim { animation-duration: 1.25s; }
-            .viewport.speed7 .fade { animation-duration: 0.625s; } /* Fading is half the time of everything else */
-            .viewport.speed7 .walk-direction .fade { animation-delay: 0.625s; }
-            
-            .viewport.speed8 .walkanim { animation-duration: 1s; }
-            .viewport.speed8 .fade { animation-duration: 0.5s; } /* Fading is half the time of everything else */
-            .viewport.speed8 .walk-direction .fade { animation-delay: 0.5s; }
-            
-            .viewport.speed9 .walkanim { animation-duration: 0.75s; }
-            .viewport.speed9 .fade { animation-duration: 0.375s; } /* Fading is half the time of everything else */
-            .viewport.speed9 .walk-direction .fade { animation-delay: 0.375s; }
-            
-            .viewport.speed10 .walkanim { animation-duration: 0.5s; }
-            .viewport.speed10 .fade { animation-duration: 0.25s; } /* Fading is half the time of everything else */
-            .viewport.speed10 .walk-direction .fade { animation-delay: 0.25s; }
         </style>
         <script src="https://code.jquery.com/jquery-1.12.3.min.js" integrity="sha256-aaODHAgvwQW1bFOGXMeX+pC4PZIPsvn2h1sArYOhgXQ=" crossorigin="anonymous"></script>
-        <!--script src="file:///c|/program files (x86)/microsoft asp.net/asp.net web stack 5/packages/jquery.1.10.2/content/scripts/jquery-1.10.2.min.js"--><!--/script-->
         <script>
             var pointCounter = 0;
             var center = { x: 0, z: 0 };
@@ -806,6 +873,7 @@
             var from = { x: 0, z: 0 };
             var to = { x: 0, z: 0 };
             var trow = null;
+            const blocksize = 40;
 
             $(function () {
                 loadFromHash();
@@ -1239,7 +1307,7 @@
                             gridRow.appendChild(chunk);
                         } else {
                             chunkLen++;
-                            chunk.setAttribute('style', 'width: ' + (chunkLen * 100) + 'px');
+                            chunk.setAttribute('style', 'width: ' + (chunkLen * blocksize) + 'px');
                         }
                         if (highlightFn != null) {
                             var high = highlightFn(point);
@@ -1346,8 +1414,8 @@
                 pathLayer.setAttribute('id', 'path-layer');
                 pathLayer.setAttribute('class', 'path-layer');
                 document.getElementById('circleHolder').appendChild(pathLayer);
-                $('#circleHolder').width((to.x - from.x) * 100 + 110).height((to.z - from.z) * 100 + 110); /* Variables */
-                $('.backdrop').width((to.x - from.x) * 100 + 100).height((to.z - from.z) * 100 + 110); /* Variables */
+                $('#circleHolder').width((to.x + 1 - from.x) * blocksize + blocksize / 10).height((to.z + 1 - from.z) * blocksize + blocksize / 10); /* Variables */
+                $('.backdrop').width((to.x + 1 - from.x) * blocksize).height((to.z + 1 - from.z) * blocksize + blocksize / 10); /* Variables */
 
                 overlayCircle(center, 0.3, 'center');
                 overlayCircle(center, inner, 'inner');
@@ -1367,9 +1435,9 @@
                 var relCenter = vecSub(center, from);
                 var circle = document.createElement('div');
                 circle.setAttribute('class', 'circle ' + cls);
-                var top = (relCenter.z - radius) * 100 + 50; /* Variables */
-                var left = (relCenter.x - radius) * 100 + 50; /* Variables */
-                var radpx = (radius * 100) - 5; /* Variables */
+                var top = (relCenter.z - radius) * blocksize + blocksize / 2; /* Variables */
+                var left = (relCenter.x - radius) * blocksize + blocksize / 2; /* Variables */
+                var radpx = (radius * blocksize) - blocksize / 20; /* Variables */
                 var style = 'top: ' + top + 'px; left: ' + left + 'px; ';
                 if (radpx > 0) {
                     style += 'padding: ' + radpx + 'px; ';
@@ -1402,7 +1470,7 @@
                 if (cell == null) {
                     var cell = document.createElement('span');
                     cell.setAttribute('id', id);
-                    cell.setAttribute('style', 'left: ' + ((point.x - from.x) * 100) + 'px');
+                    cell.setAttribute('style', 'left: ' + ((point.x - from.x) * blocksize) + 'px');
                     row.appendChild(cell);
                 }
                 cell.setAttribute('class', 'gb ' + type);
@@ -1787,9 +1855,9 @@
             function moveToWalkPoint(animClass) {
                 setAnimSpeed();
                 var walkPoint = segmentPoint(walkSegment, walkOffset);
-                $('#loctable').css('transform', 'translate(' + (from.x + to.x - walkPoint.x * 2) * 50 + 'px, ' + (from.z + to.z - walkPoint.z * 2) * 50 + 'px)'); /* Variables */
+                $('#loctable').css('transform', 'translate(' + (from.x + to.x - walkPoint.x * 2) * (blocksize / 2) + 'px, ' + (from.z + to.z - walkPoint.z * 2) * (blocksize / 2) + 'px)'); /* Variables */
                 $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west');
-                $('.walkpoint').removeClass('walkpoint walkanim');
+                $('.walkpoint').removeClass('walkpoint');
                 var vpElem = document.getElementById('circleViewport');
                 $('.fading').removeClass('fading');
                 vpElem.offsetWidth = vpElem.offsetWidth; // Force a reflow after removing all the animation classes
@@ -1798,7 +1866,7 @@
                     if (animClass.startsWith('move-') || animClass.startsWith('turn-')) walkAnimating = true;
                 }
                 $('.viewport').addClass('face-' + orientationNames[orientationMultiply(walkSegment.orientation, getWalkFace())]);
-                $('#x' + walkPoint.x + 'z' + walkPoint.z).addClass('walkpoint walkanim');
+                $('#x' + walkPoint.x + 'z' + walkPoint.z).addClass('walkpoint');
 
                 if (animClass.startsWith('turn')) {
                     $('#walkFaceLabel').addClass('fading');
@@ -1868,7 +1936,7 @@
                 $('#loctable').css('transform', 'none');
                 if ($('viewport').hasClass('walk-mode')) $('.viewport').addClass('end-walk');
                 $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west walk-mode');
-                $('.walkpoint').removeClass('walkpoint walkanim');
+                $('.walkpoint').removeClass('walkpoint');
                 $('.fading').removeClass('fading');
                 setHash();
             }
