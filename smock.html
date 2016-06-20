@@ -4,63 +4,84 @@
         <meta charset="UTF-8">
         <!--
         TODO
+            - Circles
+  - Theming
+    - css file smock-theme-xxx.css
+    - .smock-theme-xxx {
+        --theme-name: 'My theme';
+      }
+      #smock.smock-theme-xxx {
+        --ui-bg-colour: ... etc;
+      }
+  - Config
+    - JS file smock-config.js
+    - var smockConfig = {
+        themes: ['default', 'nether', ...],
+        chunkSize: 16,
+        walkStartSpeed: 7,
+        walkStartClockwise: true,
+        walkStartLookingBehind: true,
+        walkStartIn3D: true,
+      };
+  - Chunks
+    - New method to get current path radius (returns either outer, inner or outer+inner/2)
+    - Path chunks are generated if the center of the chunk is within chunkSize*sqrt2 + 2 of path radius inward or outward
+    - functions to get "next unrendered grid chunk" and "next unrendered path chunk"
+      - Or possibly iterators returning all unrendered grid/path chunks
+    - chunks are given ids grid_x_z or grid-x-z (for pos and negative x and z) and path_x_z/path-x-z, so detecting if a chunk has been rendered is a matter of document.getElementById() != null
+    - growGrid does 8 loops, each doing 8 unrendered grid chunks and 1 unrendered path chunk and then incrementing the delay
+    - stores the last chunk it generates and uses animationEnd on that to re-trigger itself if necessary
+    - refreshPath removes all path chunks and just triggers growGrid
+    - chunk visibility set by 'shown' class in walk mode
+            - keep track of chunkShownFrom/chunkShownTo
+            - flag for chunkShowNeeded and chunkHideNeeded
+                - set showNeeded if from/to move outwards and hideNeeded if from/to move inwards
+                - chunkShowNeeded gets unset if all chunks in the to-be-rendered area are found to be shown, but if any are null it stays set
+            - chunks potentially get shown or hidden at the end of each walk step but only if "needed"
+            - to show, loop over chunks in visible area and set shown by id if not already
+            - to hide, loop over 'shown' chunks and remove shown class from any outside boundary
+   - Path
+     - JS iterator function for pathSegments
+     - function* pathSegments(highlightFn) { yield segment... }
+   - elemDo etc
+     - Rename elemSetXyz etc to elemSetXyzOp
+     - Add elemSetXyz(elem, ...) and elemsSetXyz() helpers that are just wrappers calling elemDo(elem, elemSetXyzOp(...)) and elemsDo respectively
+     - Add elemGetXyz(elem, ...) for all setters
+     - Add elem[s]SetEvent[Op]('event', handler) and elem[s]RemoveEvent[Op]('event', handler)
+     - Add elemWaitFor(elem, 'event') returning a promise (which removes its own handler on resolve)
+            - If elem is not found the promise rejects
+            - For completeness we might want elemsWaitFor, but semantically it'd have to be elemsWaitForAny() and elemsWaitForAll()
+            - NOT an 'op' because return value
+            - but eg at end of growGrid:
+              elemWaitFor(lastRenderedChunk, 'animationend').then(growGrid);
+              Looks something like return new Promise(function(resolve, reject) { let handler = function(e) { resolve(e); elem.removeEventListener(evt, handler); }; elem.addEventListener(evt, handler);});
 
-- .blocks.across and .blocks.down classes get grid 'gradient' backgrounds alternating transparent and black, 'to right' and 'to bottom' respectively
-- .blocks class gets width and height calculated based on --rows and --cols custom properties (--<rows/cols> * --block-size - --block-border)
-- viewport gets --fromx and --fromz custom properties set
-- .blocks class also gets top and left calculated based on --x and --z custom properties ((--x - --fromx) * --block-size)
-- .blocks.across gets --rows: 1 and .blocks.down gets --cols: 1 by default
-- calculation is --rows * --block-size - --block-border
-- entire grid has .blocks, --rows and --cols set, 'outside' background color and a border; inside that there's a layer with .blocks.across and --rows: inherit, then a layer with .blocks.down and --cols: inherit
-  - but no x or z so the top/left don't apply
-- Then we loop adding the ring and inner with .blocks.across, --x, --z, --cols
-- Then we loop adding segments; single-block segments for 'connect' at start and end as needed and long segments for 'highlight'; skip a segment if length is 1 and previous segment was not skipped
-- Probably no need for growGrid; with this algorithm we can make the whole grid in one shot even for big circles
-  (for r=1000 we have max 6000 ring/inside bars and ~4000 path segments; previously for r=100 we had 10000 single grid blocks)
-  (this algorithm has the number of elements proportional to R (specifically about 10*R) rather than to R^2 which is very nice!)
-- Segments have outline rather than border so that position is right
-- Circles have a --radius property, padding is calculated as (--radius * --block-size - --block-border/2)
-- Walk Step Flash is in another layer after that
-    - Also used for highlighting a square on hover and click-to-set-point
-    - Flash animation is infinite-repeat, but
-        - animation iteration event removes block entirely if it's no longer the current one
-        - step event creates a new one if there isn't one OR if the existing one isn't at the right coords
-    - Flashing square gets X/Z coords in a bubble to top/right of it (independent of actual direction) (use :last-of-type or something so it only shows up for real current one)
-- Layers:
-  - Grid border/outside bg
-  - Grid across
-  - Grid down
-  - Ring/inside
-  - Circle shadows
-  - Path
-  - Circles
-    - Circles still have their own shadows as well as the ones rendered below - need to contrast with Path
-  - Walk Step Flash / Hover Highlight
-  (Crosshairs for walk are outside the grid because they need to be immune to movetable/turntable animation)
-- Coordinate labels around perimeter positioned outside grid and have their own transforms to keep them upright during spins (and possibly even flat during 3d tilt)
-- JS only ever sets --fromx, --fromz, --x, --z, --rows, --cols, --radius; never does pixel calculations
-- Fix positioning of "Facing" in Chrome
-- Fix incorrect z-ordering when facing != east in chrome
-- Fix screwy circle shadows when facing != north in Firefox
-  - Try rotating the circles back to north
-  - Worst case just remove inner shadows when facing != north and not moving
-  - If all else fails put the circle layer outside the effect of the rotation tables, but that's tricky as the turn tables are in the middle of other transforms that the circles ARE susceptible to
+            - Implement walk step flash the new way
+                - Walk Step Flash is in another layer after that
+                    - Flash animation is infinite-repeat, but
+                        - animation iteration event removes block entirely if it's no longer the current one
+                        - step event creates a new one if there isn't one OR if the existing one isn't at the right coords
+                    - Flashing square gets X/Z coords in a bubble to top/right of it (independent of actual direction) (use :last-of-type or something so it only shows up for real current one)
+            - Implement hover and click-to-set-point
+            - JS only ever sets --fromx, --fromz, --x, --z, --rows, --cols, --radius; never does pixel calculations
+            - Fix positioning of "Facing" in Chrome
+            - Coordinate labels around perimeter positioned outside grid and have their own transforms to keep them upright during spins (and possibly even flat during 3d tilt)
+            - Fix incorrect z-ordering making path disappear (smaller chunks might fix?)
+            - Remove all unused code
+            - Eliminate jQuery dependency
 
-- Add the ability to render only part of the grid:
-    - Possibly put overflow: hidden on circle layer if in this mode
-    - In walk and/or 3D mode render only a limited area (20 block radius?) around the current coordinate
-    - Re-render (at the end of an animation step before starting the next one) any time the current coordinate gets within a certain distance (10 block radius?) of the edge of the rendered area
-    - Complicated algorithm for guessing the most common block type within a given area
-
-  - Change loadFromHash to no longer treat part of the url being missing/invalid as 'leave unchanged', but rather as 'reset to default'
-  - Change loadFromHash so that if the circle parameters aren't changed it knows not to rerender; if the path choice is unchanged it knows not to refresh the path; if we're already in walk mode it knows not to exit and re-enter it
-  - Change loadFromHash so that if the walk choices (fwd/rev/pause, clockwise/anti, ahead/behind, 3d, speed) are all that's changed then it simply changes the form controls' state and calls triggerWalkStep to pick up the changes
-  - Change url representation so that in unpaused states the step no isn't part of the url; in paused states the step no replaces 'paused' in the url
-  - Change loadFromHash so that if we are moving to a (paused) stepNo that's within 2 of current stepNo then it sets pendingSteps; if further away than that then it zooms straight to the appropriate point
-  - Use speed10 for pendingSteps regardless of speed slider
-  - Decrement pendingSteps at end of animation step, eg
-    if (playMode == paused) pendingSteps -= Math.sign(pendingSteps)
-    - Allows easy detection of which direction we're moving even if we're doing so as a pendingStep, which lets us fix the animation direction for the fades
+            - Changes to loadFromHash:
+                  - No longer treat part of the url being missing/invalid as 'leave unchanged', but rather as 'reset to default'
+                  - If the circle parameters aren't changed it knows not to rerender
+                  - If the path choice is unchanged it knows not to refresh the path
+                  - If we're already in walk mode it knows not to exit and re-enter it
+                  - If the walk choices (fwd/rev/pause, clockwise/anti, ahead/behind, 3d, speed) are all that's changed then it simply changes the form controls' state and calls triggerWalkStep to pick up the changes
+                  - Change url representation so that in unpaused states the step no isn't part of the url; in paused states the step no replaces 'paused' in the url
+                  - If we are moving to a (paused) stepNo that's within 2 of current stepNo then it sets pendingSteps; if further away than that then it zooms straight to the appropriate point
+                  - Use speed10 for pendingSteps regardless of speed slider
+                  - Decrement pendingSteps at end of animation step, eg
+                    if (playMode == paused) pendingSteps -= Math.sign(pendingSteps)
+                    - Allows easy detection of which direction we're moving even if we're doing so as a pendingStep, which lets us fix the animation direction for the fades
 
 
             - Walk mode:
@@ -116,6 +137,7 @@
                 --path-colour: blue;
                 --path-connect-colour: purple;
                 --flash-colour: white;
+                --crosshairs-colour: green;
                 --point-border-colour: red;
                 --point-fill-colour: rgba(255, 0, 0, 0.3);
                 --centre-border-colour: black;
@@ -252,18 +274,6 @@
                 --block-colour: var(--path-colour);
                 --stack-colour: var(--path-connect-colour);
             }
-            span.interior-block {
-                --block-colour: var(--inside-colour);
-            }
-            span.ring-block {
-                --block-colour: var(--ring-colour);
-            }
-            span.highlight-block {
-                --block-colour: var(--path-colour);
-            }
-            span.connect-block {
-                --block-colour: var(--path-connect-colour);
-            }
 
             div.progress {
                 background: var(--ui-panel-bg-gradient);
@@ -271,92 +281,115 @@
                 background-repeat: no-repeat;
             }
 
-            .grid {
-                border-left: var(--block-border) solid var(--gridline-colour); /* Variable */
-                border-top: var(--block-border) solid var(--gridline-colour); /* Variable */
+            .backdrop {
+                width: calc(var(--cols) * var(--block-size) + var(--block-border));
+                height: calc(var(--rows) * var(--block-size) + var(--block-border));
             }
-
-            @keyframes rowin {
-                from {
-                    opacity: 0;
-                }
-            }
-
-            div.gr, div.path-row {
-                width: 100%;
-                height: calc(var(--block-size) - var(--block-border)); /* Variable */
-                line-height: 1px;
-                animation-name: rowin;
-                animation-duration: 0.5s;
-                animation-fill-mode: backwards;
-                padding-bottom: var(--block-border); /* Variable */
+            .grid-area {
+                width: calc(var(--cols) * var(--block-size) + var(--block-border));
+                height: calc(var(--rows) * var(--block-size) + var(--block-border));
                 position: relative;
             }
-            div.gr {
-                background-color: var(--gridline-colour);
+            .crosshair-layer {
+                display: none;
             }
+            .viewport.walk-mode .crosshair-layer {
+                display: block;
+            }
+            .crosshair {
+                border: var(--block-border) solid var(--crosshairs-colour);
+                position: absolute;
+                outline: 1px solid transparent;
+                box-shadow: 0 0 calc(var(--block-border) * 2) black;
+            }
+            .crosshair.across {
+                height: calc(var(--block-size) + var(--block-border));
+                top: calc(var(--block-size) * (var(--rows) - 1) / 2 - var(--block-border));
 
-            span.gchunk {
+                width: calc(var(--block-size) * 50);
+                left: calc(var(--block-size) * -10);
+            }
+            .crosshair.down {
+                width: calc(var(--block-size) + var(--block-border));
+                left: calc(var(--block-size) * (var(--cols) - 1) / 2 - var(--block-border));
+
+                height: calc(var(--block-size) * 20);
+                top: 0;
+            }
+            .blocks {
+                display: block;
+                position: absolute;
+                left: calc((var(--x) - var(--fromx)) * var(--block-size) - var(--block-border));
+                top: calc((var(--z) - var(--fromz)) * var(--block-size) - var(--block-border));
+                width: calc(var(--cols) * var(--block-size) - var(--block-border));
+                height: calc(var(--rows) * var(--block-size) - var(--block-border));
+                border: var(--block-border) solid var(--gridline-colour);
+                background-color: var(--block-colour);
+                outline: 1px solid transparent;
+            }
+            .blocks.across {
                 background-image: repeating-linear-gradient(to right,
                     var(--block-colour),
                     var(--block-colour) calc(var(--block-size) - var(--block-border)),
                     var(--gridline-colour) calc(var(--block-size) - var(--block-border)),
                     var(--gridline-colour) var(--block-size));
-                display: inline-block;
-                vertical-align: top;
-                width: var(--block-size); /* Variable */ /* Gets overridden by inline style */
-                height: calc(var(--block-size) - var(--block-border)); /* Variable */
-                padding: 0px;
-                margin: 0px;
+                --rows: 1;
             }
-
-            span.gb {
-                position: absolute;
-                display: block;
-                top: 0px;
-                width: calc(var(--block-size) - var(--block-border)); /* Variable */
-                height: calc(var(--block-size) - var(--block-border)); /* Variable */
-                padding: 0px;
-                margin: 0px;
-                background-color: var(--block-colour);
+            .blocks.down {
+                background-image: repeating-linear-gradient(to bottom,
+                    var(--block-colour),
+                    var(--block-colour) calc(var(--block-size) - var(--block-border)),
+                    var(--gridline-colour) calc(var(--block-size) - var(--block-border)),
+                    var(--gridline-colour) var(--block-size));
+                --cols: 1;
             }
-
-            .gchunk.inside, .interior-block {
-                --block-colour: var(--inside-colour);
+            .blocks.bare {
+                left: calc((var(--x) - var(--fromx)) * var(--block-size) + var(--block-border));
+                top: calc((var(--z) - var(--fromz)) * var(--block-size) + var(--block-border));
+                border: none;
             }
-
-            .gchunk.ring, .ring-block {
-                --block-colour: var(--ring-colour);
+            .blocks.down.trans {
+                --block-colour: rgba(0,0,0,0);
+                --rows: inherit;
+                --cols: inherit;
             }
-
-            .gchunk.outside {
+            .blocks.outside {
                 --block-colour: var(--outside-colour);
             }
-
-            .gb.highlight, .highlight-block {
+            .blocks.ring, span.ring-block {
+                --block-colour: var(--ring-colour);
+            }
+            .blocks.inside, span.interior-block {
+                --block-colour: var(--inside-colour);
+            }
+            .blocks.highlight, span.highlight-block {
                 --block-colour: var(--path-colour);
             }
-
-            .gb.connect, .connect-block {
+            .blocks.connect, span.connect-block {
                 --block-colour: var(--path-connect-colour);
+                --rows: 1;
+                --cols: 1;
+            }
+
+            .viewport.walk-mode #loctable {
+                transform: translate(calc((var(--fromx) + var(--cols) * 0.5 - var(--point-x) - 0.5) * var(--block-size) + var(--block-border)),
+                                     calc((var(--fromz) + var(--rows) * 0.5 - var(--point-z) - 0.5) * var(--block-size) + var(--block-border)));
+            }
+
+            @keyframes appear {
+                from { opacity: 0; }
             }
 
             @keyframes flash {
-                50% {
-                    background-color: var(--flash-colour);
-                }
-            }
-            .gb.walkpoint {
-                animation-name: flash;
-                animation-duration: var(--flashtime);
-                animation-iteration-count: 4;
+                50% { background-color: var(--flash-colour); }
             }
 
-            .gridholder {
-                position: relative;
-                background: repeating-linear-gradient(to right bottom, #555, #aaa, #555, #aaa, #555);
-                background-size: calc(var(--block-size) * 2) calc(var(--block-size) * 2);
+            .blocks.bare.walkpoint {
+                animation-name: flash;
+                animation-duration: var(--flashtime);
+                animation-iteration-count: infinite;
             }
+
             .path-layer {
                 position: absolute;
                 top: var(--block-border);
@@ -387,9 +420,10 @@
             .circle {
                 position: absolute;
                 pointer-events: none;
-                width: 0px;
-                height: 0px;
-                border: var(--block-border) solid var(--gridline-colour); /* Variable */
+                top: calc((var(--z) - var(--fromz) - var(--radius) + 0.5) * var(--block-size) - var(--block-border));
+                left: calc((var(--x) - var(--fromx) - var(--radius) + 0.5) * var(--block-size) - var(--block-border));
+                padding: calc(var(--radius) * var(--block-size) - var(--block-border) / 2);
+                border: var(--block-border) solid var(--gridline-colour);
                 border-radius: 50%;
                 animation-name: circlein;
                 animation-duration: 1s;
@@ -834,20 +868,13 @@
                     transform: translateZ(calc(2 * var(--block-border))); /* Variable */
                 }
             }
-            .viewport.view3d .gridholder {
-                background: none;
-            }
-            .viewport.view3d .grid, .viewport.view3d .gridholder, .viewport.view3d .path-layer, .viewport.view3d .gr, .viewport.view3d .gb {
-                outline: 1px solid transparent;
-            }
-            .viewport.view3d .path-layer .gb.walkpoint {
+            .viewport.view3d .blocks.bare.walkpoint {
                 animation-name: bounce3d;
             }
-            .viewport.view3d .path-layer {
-                transform: translateZ(var(--block-border)); /* Variable */
-            }
-            .viewport.view3d .circle {
-                transform: translateZ(var(--block-border)); /* Variable */
+            .viewport.view3d .path-blocks-layer,
+            .viewport.view3d .circle-layer,
+            .viewport.view3d .crosshair-layer {
+                transform: translateZ(var(--block-border));
             }
 
             @keyframes glance-down {
@@ -879,7 +906,7 @@
                 loadFromHash();
                 $('#mainForm').on('change', refreshForm);
                 $('.viewport').on('animationend', walkStepAnimationEnd);
-                $('#circleHolder').on('click', pointClick);
+                //$('#circleHolder').on('click', pointClick);
                 $(window).on('hashchange', loadFromHash);
 //                $('#directions').click(function () { $('#directions').text(getFullDirections(1, getCurrentHighlightFunction())) });
 
@@ -962,11 +989,11 @@
                     document.getElementById('center_z').valueAsNumber = point.z;
                 } else {
                     var found = false;
-                    $('#pointsList .pointrow').each(function () {
-                        var x = this.querySelector('.pointx').valueAsNumber;
-                        var z = this.querySelector('.pointz').valueAsNumber;
+                    elemsDo('#pointsList .pointrow', function(row) {
+                        var x = elemBy('.pointx', row).valueAsNumber;
+                        var z = elemBy('.pointz', row).valueAsNumber;
                         if (x == point.x && z == point.z) {
-                            $(this).remove();
+                            elem.remove();
                             found = true;
                             return false;
                         }
@@ -974,17 +1001,17 @@
 
                     if (!found) {
                         addPoint();
-                        document.getElementById('point' + pointCounter + '_x').valueAsNumber = point.x;
-                        document.getElementById('point' + pointCounter + '_z').valueAsNumber = point.z;
+                        elemById('point' + pointCounter + '_x').valueAsNumber = point.x;
+                        elemById('point' + pointCounter + '_z').valueAsNumber = point.z;
                     }
                 }
                 refreshForm();
             }
             function setCoordsRequired(nameBase) {
-                var xElem = document.getElementById(nameBase + '_x');
-                var zElem = document.getElementById(nameBase + '_z');
-                setBoolAttr(xElem, 'required', zElem.value != '');
-                setBoolAttr(zElem, 'required', xElem.value != '');
+                var xElem = elemById(nameBase + '_x');
+                var zElem = elemById(nameBase + '_z');
+                elemDo(xElem, elemSetAttr('required', zElem.value != ''));
+                elemDo(zElem, elemSetAttr('required', xElem.value != ''));
             }
             function setBoolAttr(elem, attr, value) {
                 if (value) {
@@ -1331,12 +1358,124 @@
                 if (location.hash != newHash) history.replaceState(null, '', newHash);
             }
 
+            function isArrayLike(obj) {
+                return (
+                    Array.isArray(obj) ||
+                    obj instanceof NodeList ||
+                    (!!obj &&
+                      typeof obj === "object" &&
+                      obj.hasOwnProperty("length") &&
+                      typeof (obj.length) === "number" &&
+                      (obj.length === 0 ||
+                         (obj.length > 0 &&
+                         (obj.length - 1) in item)
+                      )
+                    )
+                );
+            }
+
+            // Quicker than typing them out in full each time
+            function elemById(id) {
+                return document.getElementById(id);
+            }
+            function elemBy(selector, parent) {
+                if (parent == null) parent = document;
+                return parent.querySelector(selector);
+            }
+            function elemsBy(selector, parent) {
+                if (parent == null) parent = document;
+                return parent.querySelectorAll(selector);
+            }
+            function elemCreate(tag, ...actions) {
+                return elemDo(document.createElement(tag), ...actions);
+            }
+
+            // elem can be an ID or an element; for a selector use elemsDo even if only one
+            function elemDo(elem, ...actions) {
+                if (elem == null) return;
+                if (typeof elem === 'string') elem = elemById(elem);
+                for (var action of actions) action(elem);
+                return elem;
+            }
+
+            // elems can be a selector, element or arraylike-thing of elements
+            function elemsDo(elems, ...actions) {
+
+                if (elems instanceof Element) {
+                    for (var action of actions) action(elems);
+                } else {
+
+                    if (typeof elems == 'string') elems = elemsBy(elems);
+                    for (var elem of elems) {
+                        for (var action of actions) action(elem);
+                    }
+                }
+            }
+
+            function elemClear() {
+                return function(elem) {
+                    while (elem.firstChild) {
+                        elem.removeChild(elem.firstChild);
+                    }
+                };
+            }
+
+            function elemRemove() {
+                return function(elem) { elem.remove(); };
+            }
+
+            function elemSetClass(className, isSet) {
+                if (isSet == null) isSet = true;
+                classes = className.split(/\s+/);
+                return function(elem) {
+                    for (var cls of classes) {
+                        elem.classList.toggle(cls, isSet);
+                    }
+                };
+            }
+
+            function elemSetAttr(attr, val) {
+                // Handle boolean attributes by setting the value to the attribute name for true or removing the attribute for false.
+                if (typeof val === 'boolean') val = val ? attr : null;
+
+                if (val == null) {
+                    return function(elem) { elem.removeAttribute(attr); };
+                } else {
+                    return function(elem) { elem.setAttribute(attr, val); };
+                }
+            }
+
+            function elemSetStyle(prop, val) {
+                if (val == null) {
+                    return function(elem) { elem.style.removeProperty(prop); };
+                } else {
+                    return function(elem) { elem.style.setProperty(prop, val); };
+                }
+            }
+
+            function elemSetText(text) {
+                return function(elem) { elem.textContent = text; };
+            }
+
+            function elemSetHtml(html) {
+                return function(elem) { elem.innerHTML = html; };
+            }
+
+            function elemSetVisible(isVisible) {
+                if (isVisible == null) isVisible = true;
+                return elemSetStyle('display', isVisible ? null : 'none');
+            }
+
+            function clearGrid() {
+                elemsDo('.grid-layer', elemClear());
+            }
+
             function buildCircle() {
                 setHash();
                 center = { x: 0, z: 0 };
                 var points = getPoints();
-                var cxElem = document.getElementById('center_x');
-                var czElem = document.getElementById('center_z');
+                var cxElem = elemById('center_x');
+                var czElem = elemById('center_z');
                 var autoCenter = true;
                 if (cxElem.value != '' && czElem.value != '') {
                     center = { x: cxElem.valueAsNumber, z: czElem.valueAsNumber };
@@ -1381,20 +1520,21 @@
                     }
                 }
 
-                if (autoCenter) {
-                    $('form').addClass('autocenter');
-                    $('#centerXLabel').text(center.x.toFixed(1)).attr('title', center.x);
-                    $('#centerZLabel').text(center.z.toFixed(1)).attr('title', center.z);
-                    $('#center_x').attr('title', center.x);
-                    $('#center_z').attr('title', center.z);
-                } else {
-                    $('form').removeClass('autocenter');
-                    $('#center_x').removeAttr('title');
-                    $('#center_z').removeAttr('title');
-                }
-
-                $('#innerRadiusLabel').text(inner.toFixed(1)).attr('title', inner);
-                $('#outerRadiusLabel').text(outer.toFixed(1)).attr('title', outer);
+                elemsDo('form', elemSetClass('autocenter', autoCenter));
+                elemDo('center_x', elemSetAttr('title', autoCenter ? center.x : null));
+                elemDo('center_z', elemSetAttr('title', autoCenter ? center.z : null));
+                elemDo('centerXLabel',
+                    elemSetText(center.x.toFixed(1)),
+                    elemSetAttr('title', center.x));
+                elemDo('centerZLabel',
+                    elemSetText(center.z.toFixed(1)),
+                    elemSetAttr('title', center.z));
+                elemDo('innerRadiusLabel',
+                    elemSetText(inner.toFixed(1)),
+                    elemSetAttr('title', inner));
+                elemDo('outerRadiusLabel',
+                    elemSetText(outer.toFixed(1)),
+                    elemSetAttr('title', outer));
 
                 from = {
                     x: Math.floor(center.x - outer - 1.01),
@@ -1405,17 +1545,11 @@
                     z: Math.ceil(center.z + outer + 1.01),
                 };
 
-                $('#circleHolder').empty();
-                var table = document.createElement('div');
-                table.setAttribute('id', 'grid');
-                table.setAttribute('class', 'grid');
-                document.getElementById('circleHolder').appendChild(table);
-                var pathLayer = document.createElement('div');
-                pathLayer.setAttribute('id', 'path-layer');
-                pathLayer.setAttribute('class', 'path-layer');
-                document.getElementById('circleHolder').appendChild(pathLayer);
-                $('#circleHolder').width((to.x + 1 - from.x) * blocksize + blocksize / 10).height((to.z + 1 - from.z) * blocksize + blocksize / 10); /* Variables */
-                $('.backdrop').width((to.x + 1 - from.x) * blocksize).height((to.z + 1 - from.z) * blocksize + blocksize / 10); /* Variables */
+                setGridArea();
+
+                renderArea('new-grid', from, to);
+
+                countBlocks();
 
                 overlayCircle(center, 0.3, 'center');
                 overlayCircle(center, inner, 'inner');
@@ -1424,26 +1558,94 @@
                 for (var i = 0; i < points.length; i++) {
                     overlayCircle(points[i], correction, 'point');
                 }
-                refreshPath();
-                ringCount = 0;
-                interiorCount = 0;
-                setBlockCountLabel('ring', 0);
-                setBlockCountLabel('interior', 0);
-                requestAnimationFrame(growGrid);
+
+                //requestAnimationFrame(growGrid);
             }
-            function overlayCircle(center, radius, cls) {
-                var relCenter = vecSub(center, from);
-                var circle = document.createElement('div');
-                circle.setAttribute('class', 'circle ' + cls);
-                var top = (relCenter.z - radius) * blocksize + blocksize / 2; /* Variables */
-                var left = (relCenter.x - radius) * blocksize + blocksize / 2; /* Variables */
-                var radpx = (radius * blocksize) - blocksize / 20; /* Variables */
-                var style = 'top: ' + top + 'px; left: ' + left + 'px; ';
-                if (radpx > 0) {
-                    style += 'padding: ' + radpx + 'px; ';
+
+            function countBlocks() {
+                interiorCount = 0;
+                ringCount = 0;
+                for (var x = from.x; x <= to.x; x++) {
+                    for (var z = from.z; z <= to.z; z++) {
+                        var point = { x: x, z: z };
+                        var dist = getDistance(center, point);
+                        if (dist < inner) {
+                            interiorCount++;
+                        } else if (dist < outer) {
+                            ringCount++;
+                        }
+                    }
                 }
-                circle.setAttribute('style', style);
-                document.getElementById('circleHolder').appendChild(circle);
+                setBlockCountLabel('ring', ringCount);
+                setBlockCountLabel('interior', interiorCount);
+                countPath();
+            }
+
+            function countPath() {
+                var highlightFn = getCurrentHighlightFunction();
+
+                segmentCount = 0;
+                stepCount = 0;
+                var pathBlocks = 0;
+                var connectBlocks = 0;
+
+                var first = findStartSegment(1, highlightFn);
+
+                if (first != null) {
+                    var segment = first.segment;
+                    var minx = segment.start.x;
+                    var minz = segment.start.z; // Actually is the minimum by definition so don't need to look for anything lower
+                    var maxx = minx;
+                    var maxz = minz;
+
+                    while (segmentCount < 4 || !vecEqual(segment.start, first.segment.start)) {
+                        if (segment.start.x < minx) minx = segment.start.x;
+                        if (segment.start.x > maxx) maxx = segment.start.x;
+                        if (segment.start.z > maxz) maxz = segment.start.z;
+                        console.log('stepCount is ' + stepCount);
+
+                        console.log(segmentStr(segment));
+
+                        segmentCount++;
+                        stepCount += 1 + segment.count;
+                        console.log('after segment, stepCount is ' + stepCount);
+
+                        pathBlocks += segment.count;
+                        if (segment.length == 0) pathBlocks--;
+
+                        if (segment.endIsConnect) connectBlocks++;
+
+                        segment = segmentNext(segment, highlightFn);
+                    }
+                    console.log('final stepCount = ' + stepCount);
+
+                    // Very small circles do funny things due to multiple overlapping, easiest to just count blocks directly in that case
+                    if (maxx - minx <= 4 || maxz - minz <= 4) {
+                        pathBlocks = 0;
+                        connectBlocks = 0;
+                        for (var x = minx; x <= maxx; x++) {
+                            for (var z = minz; z <= maxz; z++) {
+                                var type = highlightFn({ x: x, z: z });
+                                if (type != null) pathBlocks++;
+                                if (type == 'connect') connectBlocks++;
+                            }
+                        }
+                    }
+                }
+                setBlockCountLabel('path', pathBlocks);
+                setBlockCountLabel('highlight', pathBlocks - connectBlocks);
+                setBlockCountLabel('connect', connectBlocks);
+
+            }
+
+            function overlayCircle(center, radius, cls) {
+                elemById('circle-holder').appendChild(
+                    elemCreate('div',
+                        elemSetClass('circle ' + cls),
+                        elemSetStyle('--x', center.x),
+                        elemSetStyle('--z', center.z),
+                        elemSetStyle('--radius', radius))
+                );
             }
 
             function clearHighlight() {
@@ -1485,6 +1687,9 @@
             }
 
             function refreshPath() {
+                buildCircle();
+                return;
+
                 clearHighlight();
                 var highlightFn = getCurrentHighlightFunction();
 
@@ -1544,25 +1749,20 @@
             }
 
             function setBlockCountLabel(type, count) {
-                var container = $('#' + type + '-count');
-                if (count == 0) {
-                    container.hide();
-                } else {
-                    container.show();
-                    $('.block-count', container).text(count);
-                    if (count < 64) {
-                        $('.stacks', container).hide();
-                    } else {
-                        $('.stacks', container).show();
+                var container = elemById(type + '-count');
+                elemDo(container, elemSetVisible(count > 0));
+
+                if (count > 0) {
+                    elemDo(elemBy('.block-count', container), elemSetText(count));
+
+                    elemDo(elemBy('.stacks', container), elemSetVisible(count >= 64));
+
+                    if (count >= 64) {
                         var rem = count % 64;
                         var stacks = (count - rem) / 64;
-                        $('.stack-count', container).text(stacks);
-                        if (rem == 0) {
-                            $('.rem', container).hide();
-                        } else {
-                            $('.rem', container).show();
-                            $('.stack-rem', container).text(rem);
-                        }
+                        elemDo(elemBy('.stack-count', container), elemSetText(stacks));
+                        elemDo(elemBy('.rem', container), elemSetVisible(rem > 0));
+                        elemDo(elemBy('.stack-rem', container), elemSetText(rem));
                     }
                 }
             }
@@ -1855,7 +2055,8 @@
             function moveToWalkPoint(animClass) {
                 setAnimSpeed();
                 var walkPoint = segmentPoint(walkSegment, walkOffset);
-                $('#loctable').css('transform', 'translate(' + (from.x + to.x - walkPoint.x * 2) * (blocksize / 2) + 'px, ' + (from.z + to.z - walkPoint.z * 2) * (blocksize / 2) + 'px)'); /* Variables */
+                elemsDo('.viewport', elemSetStyle('--point-x', walkPoint.x), elemSetStyle('--point-z', walkPoint.z));
+
                 $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west');
                 $('.walkpoint').removeClass('walkpoint');
                 var vpElem = document.getElementById('circleViewport');
@@ -1933,7 +2134,6 @@
             function endWalk() {
                 walkSegment = null;
                 walkAnimating = false;
-                $('#loctable').css('transform', 'none');
                 if ($('viewport').hasClass('walk-mode')) $('.viewport').addClass('end-walk');
                 $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west walk-mode');
                 $('.walkpoint').removeClass('walkpoint');
@@ -2036,6 +2236,213 @@
 
                 moveToWalkPoint(anim);
             }
+
+            function createBlocksDiv(type, point, cols, rows) {
+                var blocks = document.createElement('div');
+                blocks.setAttribute('class', 'blocks ' + type);
+                if (point != null) {
+                    blocks.style.setProperty('--x', point.x);
+                    blocks.style.setProperty('--z', point.z);
+                }
+                if (cols != null) blocks.style.setProperty('--cols', cols);
+                if (rows != null) blocks.style.setProperty('--rows', rows);
+                return blocks;
+            }
+
+            function setGridArea() {
+                clearGrid();
+
+                elemDo('circleViewport',
+                    elemSetStyle('--fromx', from.x),
+                    elemSetStyle('--fromz', from.z),
+                    elemSetStyle('--cols', to.x - from.x + 1),
+                    elemSetStyle('--rows', to.z - from.z + 1));
+            }
+
+            function renderAreaPath(id, areaFrom, areaTo) {
+
+            }
+
+            function renderArea(id, areaFrom, areaTo) {
+                var bg = getMajorityBlockType(areaFrom, areaTo);
+                var area = createBlocksDiv('chunk across ' + bg, areaFrom, areaTo.x - areaFrom.x + 1, areaTo.z - areaFrom.z + 1);
+                area.setAttribute('id', id);
+                area.appendChild(createBlocksDiv('down trans'));
+                for (var z = areaFrom.z; z <= areaTo.z; z++) {
+                    var stripType = bg;
+                    var stripLen = 0;
+                    var strip = null;
+                    for (var x = areaFrom.x; x <= areaTo.x; x++) {
+                        var point = { x: x, z: z };
+                        var dist = getDistance(center, point);
+                        var type = 'outside';
+                        if (dist < inner) {
+                            type = 'inside';
+                        } else if (dist < outer) {
+                            type = 'ring';
+                        }
+                        if (type != stripType) {
+                            stripType = type;
+                            stripLen = 1;
+                            if (type == bg) {
+                                strip = null;
+                            } else {
+                                strip = createBlocksDiv('across ' + type, point, 1);
+                                area.appendChild(strip);
+                            }
+                        } else if (strip != null) {
+                            stripLen++;
+                            strip.style.setProperty('--cols', stripLen);
+                        }
+                    }
+                }
+
+                var highlightFn = getCurrentHighlightFunction();
+                var first = findStartSegment(1, highlightFn);
+
+                if (first != null) {
+
+                    var lastSegmentWasRendered = false;
+                    var pathLayer = null;
+
+                    var isFirstSegment = true;
+                    for (var rawSegment = first.segment;
+                         isFirstSegment || !vecEqual(rawSegment.start, first.segment.start);
+                         rawSegment = segmentNext(rawSegment, highlightFn)) {
+
+                        isFirstSegment = false;
+                        var segment = rawSegment;
+
+                        console.log('Working on rendering ' + segmentStr(segment));
+                        // Skip it!
+
+                        // Zero-length segments never need rendering at all and don't even count as a "last segment".
+                        if (segment.count == 0) continue;
+
+                        // If the last segment was rendered and this one's length is 1, we don't need to render it.
+                        if (lastSegmentWasRendered && segment.count == 1) { lastSegmentWasRendered = false; continue; }
+
+                        lastSegmentWasRendered = false;
+
+
+                        // Flip it!
+
+                        // If the segment is going in a negative coordinate direction, reverse it.
+                        if (segment.orientation >= 2) segment = segmentReverse(segment);
+
+
+                        // Clip it!
+
+                        // If the segment is outside the area being rendered then we don't need to render it.
+                        var end = segmentEnd(segment);
+                        if (segment.start.x > areaTo.x || end.x < areaFrom.x || segment.start.z > areaTo.z || end.z < areaFrom.z) continue;
+
+                        // Trim the ends off the segment to get just the part that's within the area.
+                        if (segment.start.x < areaFrom.x) segment = segmentSkip(segment, areaFrom.x - segment.start.x);
+                        if (segment.start.z < areaFrom.z) segment = segmentSkip(segment, areaFrom.z - segment.start.z);
+                        if (end.x > areaTo.x) segment = segmentTruncate(segment, areaTo.x - segment.start.x + 1);
+                        if (end.z > areaTo.z) segment = segmentTruncate(segment, areaTo.z - segment.start.z + 1);
+
+
+                        // Tip it!
+
+                        lastSegmentWasRendered = true;
+                        if (pathLayer == null) {
+                            pathLayer = document.createElement('div');
+                            pathLayer.setAttribute('id', 'path-' + id);
+                            pathLayer.setAttribute('class', 'path-blocks-layer');
+                            elemById('grid-path-holder').appendChild(pathLayer);
+                        }
+
+                        // If the first block is a 'connect', render it.
+                        if (segment.startIsConnect) {
+                            pathLayer.appendChild(createBlocksDiv('connect', segment.start));
+                            segment = segmentSkip(segment, 1);
+                        }
+
+                        // If the last square is a 'connect', render it.
+                        if (segment.count >= 0 && segment.endIsConnect) {
+                            pathLayer.appendChild(createBlocksDiv('connect', segmentEnd(segment)));
+                            segment = segmentTruncate(segment, segment.count - 1);
+                        }
+
+
+                        // Strip it!
+
+                        // Render the remaining strip of blocks.
+                        if (segment.count >= 0) {
+                            pathLayer.appendChild(createBlocksDiv(
+                                'highlight ' + (segment.orientation == orientations.East ? 'across' : 'down'),
+                                segment.start,
+                                (segment.orientation == orientations.East ? segment.count + 1 : null),
+                                (segment.orientation == orientations.East ? null : segment.count + 1)));
+                        }
+                    }                    
+                }
+                elemById('grid-blocks-holder').appendChild(area);
+            }
+
+            function circleIntegrate(r, x) {
+                return (r * r * Math.acos(x / r) + x * circleIntersect(r, x)) / 2;
+            }
+
+            function circleIntersect(r, d) {
+                return Math.sqrt(r * r - d * d);
+            }
+
+            function circleQuadrantRectOverlap(r, xmin, xmax, zmin, zmax) {
+
+                // Entirely outside
+                if (xmin * xmin + zmin * zmin > r * r) return 0;
+
+                // Entirely inside
+                if (xmax * zmax == 0 || xmax * xmax + zmax * zmax < r * r) return (xmax - xmin) * (zmax - zmin);
+
+                // Find where the circle intersects the rectangle and cut off xmax and zmax at the circle boundary
+                if (xmax * xmax + zmin * zmin > r * r) xmax = circleIntersect(r, zmin);
+                var xtopIntersect = xmin;
+                if (zmax * zmax + xmin * xmin > r * r) {
+                    zmax = circleIntersect(r, xmin);
+                } else {
+                    xtopIntersect = circleIntersect(r, zmax);
+                }
+
+                // Integrate to get the area under the curve
+                var areaUnderCurve = circleIntegrate(r, xmax) - circleIntegrate(r, xtopIntersect);
+
+                // Add and subtract the rectangular parts
+                return (xtopIntersect - xmin) * (zmax - zmin) + areaUnderCurve - zmin * (xmax - xtopIntersect);
+            }
+
+            function circleQuadrantFlippedRectOverlap(r, from, to, xsign, zsign) {
+                var xfrom = Math.max(from.x * xsign, 0);
+                var zfrom = Math.max(from.z * zsign, 0);
+                var xto = Math.max(to.x * xsign, 0);
+                var zto = Math.max(to.z * zsign, 0);
+                return circleQuadrantRectOverlap(r, Math.min(xfrom, xto), Math.max(xfrom, xto), Math.min(zfrom, zto), Math.max(zfrom, zto));
+            }
+
+            function circleRectOverlap(centre, r, from, to) {
+                from = vecAdd({ x: -0.5, z: -0.5 }, vecSub(from, centre));
+                to = vecAdd({ x: 0.5, z: 0.5 }, vecSub(to, centre));
+                return circleQuadrantFlippedRectOverlap(r, from, to, 1, 1) +
+                       circleQuadrantFlippedRectOverlap(r, from, to, -1, 1) +
+                       circleQuadrantFlippedRectOverlap(r, from, to, 1, -1) +
+                       circleQuadrantFlippedRectOverlap(r, from, to, -1, -1);
+            }
+
+            function getMajorityBlockType(from, to) {
+                var total = (to.x - from.x + 1) * (to.z - from.z + 1);
+                var withinOuter = circleRectOverlap(center, outer, from, to);
+
+                var inside = circleRectOverlap(center, inner, from, to);
+                var ring = withinOuter - inside;
+                var outside = total - withinOuter;
+
+                if (inside >= ring && inside >= outside) return 'inside';
+                return ring >= outside ? 'ring' : 'outside';
+            }
+
         </script>
     </head>
     <body>
@@ -2200,10 +2607,19 @@
                                 <div id="turntable" class="table walkanim">
                                     <div id="loctable" class="table">
                                         <div id="movetable" class="table walkanim">
-                                            <div id="circleHolder" class="gridholder"></div>
+                                            <div id="grid-area" class="grid-area">
+                                                <div id="grid-blocks-holder" class="grid-layer grid-blocks-layer"></div>
+                                                <div id="grid-path-holder" class="grid-layer grid-path-layer"></div>
+                                                <div id="circle-holder" class="grid-layer circle-layer"></div>
+                                                <div id="flash-holder" class="grid-layer flash-layer"></div>
+                                            </div>
                                         </div>
                                     </div>
                                 </div>
+                            </div>
+                            <div class="crosshair-layer">
+                                <div class="crosshair across"></div>
+                                <div class="crosshair down"></div>
                             </div>
                         </div>
                     </div>
