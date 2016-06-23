@@ -3,71 +3,68 @@
     <head>
         <meta charset="UTF-8">
         <!--
-        TODO
-            - Circles
-  - Theming
-    - css file smock-theme-xxx.css
-    - .smock-theme-xxx {
-        --theme-name: 'My theme';
-      }
-      #smock.smock-theme-xxx {
-        --ui-bg-colour: ... etc;
-      }
-  - Config
-    - JS file smock-config.js
-    - var smockConfig = {
-        themes: ['default', 'nether', ...],
-        chunkSize: 16,
-        walkStartSpeed: 7,
-        walkStartClockwise: true,
-        walkStartLookingBehind: true,
-        walkStartIn3D: true,
-      };
-  - Chunks
-    - New method to get current path radius (returns either outer, inner or outer+inner/2)
-    - Path chunks are generated if the center of the chunk is within chunkSize*sqrt2 + 2 of path radius inward or outward
-    - functions to get "next unrendered grid chunk" and "next unrendered path chunk"
-      - Or possibly iterators returning all unrendered grid/path chunks
-    - chunks are given ids grid_x_z or grid-x-z (for pos and negative x and z) and path_x_z/path-x-z, so detecting if a chunk has been rendered is a matter of document.getElementById() != null
-    - growGrid does 8 loops, each doing 8 unrendered grid chunks and 1 unrendered path chunk and then incrementing the delay
-    - stores the last chunk it generates and uses animationEnd on that to re-trigger itself if necessary
-    - refreshPath removes all path chunks and just triggers growGrid
-    - chunk visibility set by 'shown' class in walk mode
-            - keep track of chunkShownFrom/chunkShownTo
-            - flag for chunkShowNeeded and chunkHideNeeded
-                - set showNeeded if from/to move outwards and hideNeeded if from/to move inwards
-                - chunkShowNeeded gets unset if all chunks in the to-be-rendered area are found to be shown, but if any are null it stays set
-            - chunks potentially get shown or hidden at the end of each walk step but only if "needed"
-            - to show, loop over chunks in visible area and set shown by id if not already
-            - to hide, loop over 'shown' chunks and remove shown class from any outside boundary
-   - Path
-     - JS iterator function for pathSegments
-     - function* pathSegments(highlightFn) { yield segment... }
-   - elemDo etc
-     - Rename elemSetXyz etc to elemSetXyzOp
-     - Add elemSetXyz(elem, ...) and elemsSetXyz() helpers that are just wrappers calling elemDo(elem, elemSetXyzOp(...)) and elemsDo respectively
-     - Add elemGetXyz(elem, ...) for all setters
-     - Add elem[s]SetEvent[Op]('event', handler) and elem[s]RemoveEvent[Op]('event', handler)
-     - Add elemWaitFor(elem, 'event') returning a promise (which removes its own handler on resolve)
-            - If elem is not found the promise rejects
-            - For completeness we might want elemsWaitFor, but semantically it'd have to be elemsWaitForAny() and elemsWaitForAll()
-            - NOT an 'op' because return value
-            - but eg at end of growGrid:
-              elemWaitFor(lastRenderedChunk, 'animationend').then(growGrid);
-              Looks something like return new Promise(function(resolve, reject) { let handler = function(e) { resolve(e); elem.removeEventListener(evt, handler); }; elem.addEventListener(evt, handler);});
+Definitions (code cleanup still pending to use these consistently)
+- Unit (block/chunk represented as 1 and 16)
+- Vec
+  - Can be in block or chunk units
+  - Add an indicator of which and error if combined illegally?
+- Rect
+  - "from" = northwest corner, "to" = southeast corner
+  - Both must use same units
+  - from and to are both *inclusive*
+  - "cols", "rows" mean (to - from + 1) in each axis
+    - rename as size-x, size-z ?
+- Orientation (change face-north to orient-north etc)
+- Orbit (clockwise/anti as 1/-1)
+  - Add orbit.Clockwise and orbit.Anticlockwise a la orientations.North etc
+- Turn (left/right as -1/1)
+  - Add turn.Left and turn.Right a la orientations.North
+- Face (ahead/behind as 1/-1)
+  - Add face.Ahead and face.Behind a la orientations.North etc
+- Progression (forward/reverse as 1/-1)
+  - Add progression.Forward and progression.Reverse
+- Point
+  - A vec in block units. Integer coordinates represent the center of blocks.
+  - Rename pointToId and pointToHash as vecTo... because they aren't point-specific
+- Chunk
+  - A vec in chunk units. Coordinates must be integers. Represents a 16x16 block rect with from=chunk.from * 16
+  - Rendered as a div class="chunk" with id=[layer]_[vecToId(chunk)]
+- Grid
+  - The rect representing the entire area to be rendered.
+  - Replace global to/from with gridRect
+- Strip
+  - A rect with one of its dimensions equal to 1 (from.x == to.x || from.z == to.z). Tagged as "across" or "down" depending on which one applies.
+  - Possibly if both dimensions are 1 tag it as 'single'? Grid gradient background can be avoided in that case.
+- Segment
+  - A strip representing part of the path-walk.
+  - Data structure as is now
+- Fragment
+  - A part of a segment cut to the part that fits within a single chunk. Uses the same data structure as a segment itself.
+- Ring
+  - Center, inner boundary radius, outer boundary radius
+  - Also refers to blocks between the two radii
+- Edge
+  - Inside/Outside/Straddle (-1 / 0 / 1)
+- Boundary
+  - Inner/Outer/Middle (represented by radii rather than ints)
+- Path
+  - An edge of a boundary
+  - Represented by edge and radius
+  - Replaces "highlight function"
 
+
+            TO DO:
+            - Chunks
+                - Give grid chunks .grid-chunk class and path chunks .path-chunk, and both .chunk
+                - Make path chunks position the same way grid chunks do so their element boundaries are right
+                - Fix size thresholds to be bigger in chrome because it doesn't suck so much at 3d (but still not unlimited)
+            - Put coords and face and a mini-compass next to crosshairs instead of up top
+                    (with bg color set to sky gradient)
             - Implement walk step flash the new way
-                - Walk Step Flash is in another layer after that
-                    - Flash animation is infinite-repeat, but
-                        - animation iteration event removes block entirely if it's no longer the current one
-                        - step event creates a new one if there isn't one OR if the existing one isn't at the right coords
-                    - Flashing square gets X/Z coords in a bubble to top/right of it (independent of actual direction) (use :last-of-type or something so it only shows up for real current one)
             - Implement hover and click-to-set-point
-            - JS only ever sets --fromx, --fromz, --x, --z, --rows, --cols, --radius; never does pixel calculations
             - Fix positioning of "Facing" in Chrome
             - Coordinate labels around perimeter positioned outside grid and have their own transforms to keep them upright during spins (and possibly even flat during 3d tilt)
-            - Fix incorrect z-ordering making path disappear (smaller chunks might fix?)
-            - Remove all unused code
+            - Clean up code and remove unused stuff
             - Eliminate jQuery dependency
 
             - Changes to loadFromHash:
@@ -83,23 +80,18 @@
                     if (playMode == paused) pendingSteps -= Math.sign(pendingSteps)
                     - Allows easy detection of which direction we're moving even if we're doing so as a pendingStep, which lets us fix the animation direction for the fades
 
-
             - Walk mode:
                 - Fix step number, it does weird stuff when flipping directions
                 - Walk button can be a styled checkbox
                 - Disable form controls in walk mode
                 - Animate rotation and zoom into walk mode
                 - Animate out of walk mode
-                - Overlay a "#" type crosshair showing center square when walking
                 - Figure out scrolling up vs down correctly for coordinates
                     - It's more or less 'go downwards if looking backward or playing in reverse but not both' but detecting the 'playing in reverse' isn't easy with singlestepping
                     - Directions need to go upwards if you're playing in reverse
                 - Click directions to get full list
                 - Animate into and out of 3d mode
-                - Figure out something to make Firefox not crash on big circles
             - Use mousemove events and an overlay square to show coords so that individual squares don't need to be individual divs
-            - Position highlight squares in both x and z dimension, don't bother with path-rows at all
-            - And do them all at once with a fade-in animation rather than caring about what grs exist
             - Add extra row/col with coords on left/right/top/bottom (outermost values and multiples of 5, small font, text-align center on top/bottom and left/right on right/left, overflow visible)
                 - Consider making those slide into an overlay position during walk mode so they stay in view and rotate to stay upright
             - Prettify controls
@@ -119,6 +111,24 @@
                 - Classify all points as inside or outside the current circle.
                 - If all inside, we're done.
                 - Take furthest point from current center and use existing algorithm to grow circle to include it.
+            - Theming (eventually)
+                - css file smock-theme-xxx.css
+                - .smock-theme-xxx {
+                    --theme-name: 'My theme';
+                  }
+                  #smock.smock-theme-xxx {
+                    --ui-bg-colour: ... etc;
+                  }
+            - Config (eventually)
+                - JS file smock-config.js
+                - var smockConfig = {
+                    themes: ['default', 'nether', ...],
+                    chunkSize: 16,
+                    walkStartSpeed: 7,
+                    walkStartClockwise: true,
+                    walkStartLookingBehind: true,
+                    walkStartIn3D: true,
+                  };
         -->
         <title>Stuart's M---craft Overcomplicated Circle Kit</title>
         <style type="text/css">
@@ -296,6 +306,7 @@
             .viewport.walk-mode .crosshair-layer {
                 display: block;
             }
+
             .crosshair {
                 border: var(--block-border) solid var(--crosshairs-colour);
                 position: absolute;
@@ -307,15 +318,16 @@
                 top: calc(var(--block-size) * (var(--rows) - 1) / 2 - var(--block-border));
 
                 width: calc(var(--block-size) * 50);
-                left: calc(var(--block-size) * -10);
+                left: calc(var(--block-size) * (var(--cols) - 50) / 2);
             }
             .crosshair.down {
                 width: calc(var(--block-size) + var(--block-border));
                 left: calc(var(--block-size) * (var(--cols) - 1) / 2 - var(--block-border));
 
                 height: calc(var(--block-size) * 20);
-                top: 0;
+                top: calc(var(--block-size) * (var(--rows) - 20) / 2);
             }
+
             .blocks {
                 display: block;
                 position: absolute;
@@ -398,6 +410,20 @@
                 right: 0px;
             }
 
+            .chunk {
+                --chunk-x: var(--x);
+                --chunk-z: var(--z);
+            }
+            .chunk .blocks {
+                --fromx: var(--chunk-x);
+                --fromz: var(--chunk-z);
+            }
+            .chunk, .blocks.highlight, .blocks.connect {
+                animation-name: appear;
+                animation-duration: 1s;
+                animation-fill-mode: both;
+            }
+
             @keyframes circlein {
                 from {
                     transform: scale(0);
@@ -428,6 +454,11 @@
                 animation-name: circlein;
                 animation-duration: 1s;
                 box-shadow: 0 0 calc(var(--block-border) * 2) black, inset 0 0 calc(var(--block-border) * 2) black;
+            }
+            .circle.size-huge,
+            .viewport.walk-mode .circle.size-large,
+            .viewport.walk-mode.view3d .circle.size-biggish {
+                display: none;
             }
 
             .circle.center {
@@ -846,6 +877,9 @@
                 transform: translate(50%, 25%);
             }
 
+            .viewport.walk-mode .chunk, .viewport.walk-mode .path-blocks-layer { display: none; }
+            .viewport.walk-mode .chunk.shown, .viewport.walk-mode .path-blocks-layer.shown { display: block; }
+
             .viewport.walk-mode.view3d * {
                 transform-style: preserve-3d;
             }
@@ -899,8 +933,15 @@
             var outer = 0.5;
             var from = { x: 0, z: 0 };
             var to = { x: 0, z: 0 };
-            var trow = null;
-            const blocksize = 40;
+            var shownChunkRect;
+
+            // Firefox in particular has difficulties with really big circle divs when zoomed and 3d'd so we hide them if they get too big.
+            // Chrome can handle larger sizes (FIXME: figure out sensible thresholds for chrome)
+            const sizeThresholds = Object.freeze({
+                huge: 128,
+                large: 32,
+                biggish: 16,
+            });
 
             $(function () {
                 loadFromHash();
@@ -1263,6 +1304,9 @@
             function renderingComplete() {
                 // Not sure if we want to do anything here but this way we can
             }
+            function pathRenderingComplete() {
+                // Not sure if we want to do anything here but this way we can
+            }
 
             function walkFromHash(stepNo) {
                 var highlightFn = getCurrentHighlightFunction();
@@ -1284,69 +1328,204 @@
                 walkStep();
             }
 
-            var ringCount = 0;
-            var interiorCount = 0;
+            function setChunkShown(chunk, isShown) {
+                var id = pointToId(chunk);
+                console.log('Setting chunk ' + id + ' to ' + isShown);
+                let elem = elemById('grid_' + id);
+                if (elem != null) elem.classList.toggle('shown', isShown);
+                let pathElem = elemById('path_' + id);
+                if (pathElem != null) pathElem.classList.toggle('shown', isShown);
+            }
 
-            function growGrid() {
-                var rowCount = $('.grid .gr').length;
+            function setShownChunks(rect) {
+                rect = rectClipChunks(rect);
+                console.log('Setting shown chunks to ' + vecStr(rect.from) + ' - ' + vecStr(rect.to));
 
-                $('.progress').css('background-size', (rowCount * 100 / (1 + to.z - from.z)) + '% 100%')
+                if (shownChunkRect != null && rectEqual(rect, shownChunkRect)) return;
 
-                if (from.z + rowCount > to.z) {
-                    renderingComplete();
-                    return;
+                var changeRect = shownChunkRect == null ? rect : rectUnion(shownChunkRect, rect);
+                for (let chunkZ = changeRect.from.z; chunkZ <= changeRect.to.z; chunkZ++) {
+                    for (let chunkX = changeRect.from.x; chunkX <= changeRect.to.x; chunkX++) { 
+                        let chunk = {x: chunkX, z: chunkZ};
+                        setChunkShown(chunk, rectContains(rect, chunk));
+                    }
                 }
+                shownChunkRect = rect;
+            }
 
-                var grid = document.getElementById('grid');
-                var pathLayer = document.getElementById('path-layer');
-                if (grid == null || pathLayer == null) return;
+            function clearShownChunks() {
+                if (shownChunkRect == null) return;
 
-                var highlightFn = getCurrentHighlightFunction();
-                for (var i = 0; from.z + rowCount + i <= to.z && i < 8; i++) {
-                    var z = from.z + rowCount + i;
-                    var row = document.createElement('div');
-                    row.setAttribute('id', 'path-z' + z);
-                    row.setAttribute('class', 'path-row');
-                    row.setAttribute('style', 'animation-delay: ' + i / 10 + 's');
-                    pathLayer.appendChild(row);
-                    var gridRow = document.createElement('div');
-                    gridRow.setAttribute('class', 'gr z' + z);
-                    gridRow.setAttribute('style', 'animation-delay: ' + i / 10 + 's');
-                    var chunkType = null;
-                    var chunkLen = 0;
-                    var chunk = null;
-                    for (var x = from.x; x <= to.x; x++) {
-                        var point = { x: x, z: z };
-                        var dist = getDistance(center, point);
-                        var type = 'outside';
-                        if (dist < inner) {
-                            type = 'inside';
-                            interiorCount++;
-                        } else if (dist < outer) {
-                            type = 'ring';
-                            ringCount++;
+                for (let chunkZ = shownChunkRect.from.z; chunkZ <= shownChunkRect.to.z; chunkZ++) {
+                    for (let chunkX = shownChunkRect.from.x; chunkX <= shownChunkRect.to.x; chunkX++) {
+                        setChunkShown({x: chunkX, z: chunkZ}, false);
+                    }
+                }
+                shownChunkRect = null;
+            }
+
+            function rectClip(rect) {
+                return rectIntersect(rect, {from: from, to: to});
+            }
+            function rectClipChunks(rect) {
+                return rectIntersect(rect, {from: chunkOfPoint(from), to: chunkOfPoint(to)});
+            }
+            function rectUnion(a, b) {
+                return {
+                    from: { x: Math.min(a.from.x, b.from.x), z: Math.min(a.from.z, b.from.z) },
+                    to: { x: Math.max(a.to.x, b.to.x), z: Math.max(a.to.z, b.to.z) },
+                };
+            }
+            function rectIntersect(a, b) {
+                return {
+                    from: { x: Math.max(a.from.x, b.from.x), z: Math.max(a.from.z, b.from.z) },
+                    to: { x: Math.min(a.to.x, b.to.x), z: Math.min(a.to.z, b.to.z) },
+                };
+            }
+            function rectEqual(a, b) {
+                return vecEqual(a.from, b.from) && vecEqual(a.to, b.to);
+            }
+            function rectContains(rect, point) {
+                return point.x >= rect.from.x && point.x <= rect.to.x && point.z >= rect.from.z && point.z <= rect.to.z;
+            }
+            function chunkOfPoint(point) {
+                return { x: Math.floor(point.x / 16), z: Math.floor(point.z / 16) };
+            }
+            function chunkRect(chunk) {
+                return rectClip({
+                    from: { x: chunk.x * 16, z: chunk.z * 16 },
+                    to: { x: chunk.x * 16 + 15, z: chunk.z * 16 + 15 },
+                });
+            }
+            function chunkCentre(chunk) {
+                return { x: chunk.x * 16 + 7.5, z: chunk.z * 16 + 7.5 };
+            }
+
+            function* allChunks() {
+                let chunkFrom = chunkOfPoint(from);
+                let chunkTo = chunkOfPoint(to);
+                let cols = chunkTo.x - chunkFrom.x + 1;
+                let rows = chunkTo.z - chunkFrom.z + 1;
+
+                // This approach yields the chunks in a diagonal pattern so the ones near the top left get rendered first.
+                for (let line = 0; line < rows + cols - 1; line++) {
+                    for (let chunk = {x: chunkFrom.x + Math.max(0, line + 1 - cols), z: Math.min(chunkFrom.z + line, chunkTo.z)};
+                         chunk.x <= chunkTo.x && chunk.z >= chunkFrom.z;
+                         chunk = vecAdd(chunk, {x: 1, z: -1})) {
+                        yield chunk;
+                    }
+                }
+            }
+
+            function renderPath() {
+                elemDo('grid-path-holder', elemClear());
+
+                countPath();
+
+                const batchSize = 128;
+
+                let highlightFn = getCurrentHighlightFunction();
+                if (highlightFn == null) return;
+
+                let chunk = {x: null, z: null};
+                let rect;
+                let chunkDiv;
+                let lastSegmentWasRendered = false;
+                let segments = allSegments(1, highlightFn);
+
+                // Algorithm:
+                // Iterator over all segments
+                // Keep track of current chunk
+                // Render the part of the segment that's within the current chunk
+                // If that's not the whole thing, lop it off and do the next part
+                function triggerBatch() {
+                    this.removeEventListener('animationstart', triggerBatch);
+                    requestAnimationFrame(renderBatch);
+                }
+                function renderBatch() {
+                    let done = false;
+                    let lastStrip = null;
+
+                    for (let i = 0; i < batchSize; i++) {
+                        let next = segments.next();
+                        if (next.done) {
+                            done = true;
+                            break;
                         }
-                        if (type != chunkType) {
-                            chunkType = type;
-                            chunkLen = 1;
-                            chunk = document.createElement('span');
-                            chunk.setAttribute('class', 'gchunk ' + type);
-                            gridRow.appendChild(chunk);
-                        } else {
-                            chunkLen++;
-                            chunk.setAttribute('style', 'width: ' + (chunkLen * blocksize) + 'px');
+                        let segment = next.value;
+
+                        // If the last segment was rendered and this one's length is 1 or less, we don't need to render it.
+                        if (lastSegmentWasRendered) {
+                            if (segment.count <= 1) {
+                                if (segment.count == 1) lastSegmentWasRendered = false;
+                                continue;
+                            } else {
+                                segment = segmentSkip(segment, 1);
+                            }
                         }
-                        if (highlightFn != null) {
-                            var high = highlightFn(point);
-                            if (high != null) highlightPoint(point, high);
+
+                        let end = segmentEnd(segment);
+                        while (true) {
+                            let newChunk = chunkOfPoint(segment.start);
+                            if (!vecEqual(newChunk, chunk)) {
+                                chunk = newChunk;
+                                rect = chunkRect(chunk);
+                                let id = 'path_' + pointToId(chunk);
+                                chunkDiv = elemById(id);
+                                if (chunkDiv == null) {
+                                    chunkDiv = document.createElement('div')
+                                    chunkDiv.setAttribute('id', id);
+                                    chunkDiv.setAttribute('class', 'path-blocks-layer');
+                                    if (shownChunkRect != null && rectContains(shownChunkRect, chunk)) chunkDiv.classList.add('shown');
+                                    elemById('grid-path-holder').appendChild(chunkDiv);
+                                }
+                            }
+                            let len;
+                            if (segment.startIsConnect) {
+                                len = 0;
+                            } else if (end.x < rect.from.x) {
+                                len = segment.start.x - rect.from.x;
+                            } else if (end.x > rect.to.x) {
+                                len = rect.to.x - segment.start.x;
+                            } else if (end.z < rect.from.z) {
+                                len = segment.start.z - rect.from.z;
+                            } else if (end.z > rect.to.z) {
+                                len = rect.to.z - segment.start.z;
+                            } else if (segment.endIsConnect) {
+                                len = segment.count - 1;
+                            } else {
+                                len = segment.count;
+                            }
+
+                            let head = segmentTruncate(segment, len);
+
+                            // If the segment is going in a negative coordinate direction, reverse it.
+                            if (head.orientation >= 2) head = segmentReverse(head);
+
+                            // Render strip
+                            lastStrip = createBlocksDiv(
+                                (head.startIsConnect ? 'connect ' : 'highlight ') + (head.orientation == orientations.East ? 'across' : 'down'),
+                                head.start,
+                                (head.orientation == orientations.East ? head.count + 1 : null),
+                                (head.orientation == orientations.East ? null : head.count + 1));
+                            lastStrip.style.setProperty('animation-delay', (i / batchSize) + 's');
+                            chunkDiv.appendChild(lastStrip);
+
+                            // If we just rendered the whole thing we're done with this segment
+                            if (len == segment.count) break;
+
+                            // Otherwise move on to whatever's left
+                            segment = segmentSkip(segment, len + 1);
                         }
                     }
-                    grid.appendChild(gridRow);
+                    //elemsDo('.progress', elemSetStyle('background-size', (currentChunks * 100 / totalChunks) + '% 100%'));
+                    if (done) {
+                        pathRenderingComplete();
+                    } else {
+                        lastStrip.addEventListener('animationstart', triggerBatch);
+                    }
                 }
-                setBlockCountLabel('ring', ringCount);
-                setBlockCountLabel('interior', interiorCount);
-
-                $('.grid .gr').last().one('animationstart', function () { requestAnimationFrame(growGrid) });
+                requestAnimationFrame(renderBatch);                    
             }
 
             function setHash() {
@@ -1544,10 +1723,15 @@
                     x: Math.ceil(center.x + outer + 1.01),
                     z: Math.ceil(center.z + outer + 1.01),
                 };
+                var gridRect = {from: from, to: to};
 
-                setGridArea();
+                clearGrid();
 
-                renderArea('new-grid', from, to);
+                elemDo('circleViewport',
+                    elemSetStyle('--fromx', from.x),
+                    elemSetStyle('--fromz', from.z),
+                    elemSetStyle('--cols', to.x - from.x + 1),
+                    elemSetStyle('--rows', to.z - from.z + 1));
 
                 countBlocks();
 
@@ -1559,12 +1743,50 @@
                     overlayCircle(points[i], correction, 'point');
                 }
 
-                //requestAnimationFrame(growGrid);
+                let chunkFrom = chunkOfPoint(from);
+                let chunkTo = chunkOfPoint(to);
+                let totalChunks = (chunkTo.x - chunkFrom.x + 1) * (chunkTo.z - chunkFrom.z + 1);
+                let currentChunks = 0;
+                const batchSize = 32;
+                let highlightFn = getCurrentHighlightFunction();
+                let chunks = allChunks();
+
+                function triggerBatch() {
+                    this.removeEventListener('animationstart', triggerBatch);
+                    requestAnimationFrame(renderBatch);
+                }
+                function renderBatch() {
+                    let done = false;
+                    let chunkDiv = null;
+                    for (let i = 0; i < batchSize; i++) {
+                        let next = chunks.next();
+                        if (next.done) {
+                            done = true;
+                            break;
+                        }
+                        let chunk = next.value;
+                        let id = pointToId(chunk);
+                        let rect = chunkRect(chunk);
+                        chunkDiv = renderArea('grid_' + id, rect);
+                        if (shownChunkRect != null && rectContains(shownChunkRect, chunk)) chunkDiv.classList.add('shown');
+                        chunkDiv.style.setProperty('animation-delay', (i / batchSize) + 's');
+                        currentChunks++;
+                    }
+                    elemsDo('.progress', elemSetStyle('background-size', (currentChunks * 100 / totalChunks) + '% 100%'));
+                    if (done) {
+                        renderingComplete();
+                    } else {
+                        chunkDiv.addEventListener('animationstart', triggerBatch);
+                    }
+                }
+                requestAnimationFrame(renderBatch);
+
+                renderPath();
             }
 
             function countBlocks() {
-                interiorCount = 0;
-                ringCount = 0;
+                let interiorCount = 0;
+                let ringCount = 0;
                 for (var x = from.x; x <= to.x; x++) {
                     for (var z = from.z; z <= to.z; z++) {
                         var point = { x: x, z: z };
@@ -1578,7 +1800,6 @@
                 }
                 setBlockCountLabel('ring', ringCount);
                 setBlockCountLabel('interior', interiorCount);
-                countPath();
             }
 
             function countPath() {
@@ -1589,35 +1810,26 @@
                 var pathBlocks = 0;
                 var connectBlocks = 0;
 
-                var first = findStartSegment(1, highlightFn);
+                if (highlightFn != null) {
+                    var minx = Math.floor(center.x);
+                    var maxx = Math.ceil(center.x);
+                    var minz = Math.floor(center.z);
+                    var maxz = Math.ceil(center.z);
 
-                if (first != null) {
-                    var segment = first.segment;
-                    var minx = segment.start.x;
-                    var minz = segment.start.z; // Actually is the minimum by definition so don't need to look for anything lower
-                    var maxx = minx;
-                    var maxz = minz;
-
-                    while (segmentCount < 4 || !vecEqual(segment.start, first.segment.start)) {
+                    for (let segment of allSegments(1, highlightFn)) {
                         if (segment.start.x < minx) minx = segment.start.x;
                         if (segment.start.x > maxx) maxx = segment.start.x;
+                        if (segment.start.z < minz) minz = segment.start.z;
                         if (segment.start.z > maxz) maxz = segment.start.z;
-                        console.log('stepCount is ' + stepCount);
-
-                        console.log(segmentStr(segment));
 
                         segmentCount++;
                         stepCount += 1 + segment.count;
-                        console.log('after segment, stepCount is ' + stepCount);
 
                         pathBlocks += segment.count;
                         if (segment.length == 0) pathBlocks--;
 
                         if (segment.endIsConnect) connectBlocks++;
-
-                        segment = segmentNext(segment, highlightFn);
                     }
-                    console.log('final stepCount = ' + stepCount);
 
                     // Very small circles do funny things due to multiple overlapping, easiest to just count blocks directly in that case
                     if (maxx - minx <= 4 || maxz - minz <= 4) {
@@ -1632,6 +1844,7 @@
                         }
                     }
                 }
+
                 setBlockCountLabel('path', pathBlocks);
                 setBlockCountLabel('highlight', pathBlocks - connectBlocks);
                 setBlockCountLabel('connect', connectBlocks);
@@ -1639,19 +1852,23 @@
             }
 
             function overlayCircle(center, radius, cls) {
+                let sizeClass = '';
+                if (radius > sizeThresholds.huge) {
+                    sizeClass = 'size-huge ';
+                } else if (radius > sizeThresholds.large) {
+                    sizeClass = 'size-large ';
+                } else if (radius > sizeThresholds.biggish) {
+                    sizeClass = 'size-biggish '
+                }
                 elemById('circle-holder').appendChild(
                     elemCreate('div',
-                        elemSetClass('circle ' + cls),
+                        elemSetClass('circle ' + sizeClass + cls),
                         elemSetStyle('--x', center.x),
                         elemSetStyle('--z', center.z),
                         elemSetStyle('--radius', radius))
                 );
             }
 
-            function clearHighlight() {
-                $('.gb').remove();
-                endWalk();
-            }
             function getCurrentHighlightFunction() {
                 switch (document.forms[0]['highlight'].value) {
                     case 'exterior': return exteriorHighlight;
@@ -1663,89 +1880,18 @@
                 }
             }
 
-            function highlightPoint(point, type) {
-                var row = document.getElementById('path-z' + point.z);
-                if (row == null) return;
-
-                var id = pointToId(point);
-                var cell = document.getElementById(id);
-                if (cell == null) {
-                    var cell = document.createElement('span');
-                    cell.setAttribute('id', id);
-                    cell.setAttribute('style', 'left: ' + ((point.x - from.x) * blocksize) + 'px');
-                    row.appendChild(cell);
-                }
-                cell.setAttribute('class', 'gb ' + type);
-            }
-
-            function highlightSegment(segment) {
-                for (var i = 0; i < segment.count; i++) {
-                    var point = segmentPoint(segment, i);
-                    var type = (i == 0 && segment.startIsConnect) ? 'connect' : 'highlight';
-                    highlightPoint(point, type);
+            function getCurrentPathRadius() {
+                switch (document.forms[0]['highlight'].value) {
+                    case 'exterior': case 'outside': return outer;
+                    case 'inside': case 'interior': return inner;
+                    case 'middle': return (outer + inner) / 2;
+                    default: return null;
                 }
             }
 
             function refreshPath() {
-                buildCircle();
-                return;
-
-                clearHighlight();
-                var highlightFn = getCurrentHighlightFunction();
-
-                segmentCount = 0;
-                stepCount = 0;
-                var pathBlocks = 0;
-                var connectBlocks = 0;
-
-                var first = findStartSegment(1, highlightFn);
-
-                if (first != null) {
-                    var segment = first.segment;
-                    var minx = segment.start.x;
-                    var minz = segment.start.z; // Actually is the minimum by definition so don't need to look for anything lower
-                    var maxx = minx;
-                    var maxz = minz;
-
-                    while (segmentCount < 4 || !vecEqual(segment.start, first.segment.start)) {
-                        if (segment.start.x < minx) minx = segment.start.x;
-                        if (segment.start.x > maxx) maxx = segment.start.x;
-                        if (segment.start.z > maxz) maxz = segment.start.z;
-                        console.log('stepCount is ' + stepCount);
-
-                        console.log(segmentStr(segment));
-
-                        segmentCount++;
-                        stepCount += 1 + segment.count;
-                        console.log('after segment, stepCount is ' + stepCount);
-
-                        pathBlocks += segment.count;
-                        if (segment.length == 0) pathBlocks--;
-
-                        if (segment.endIsConnect) connectBlocks++;
-
-                        highlightSegment(segment);
-
-                        segment = segmentNext(segment, highlightFn);
-                    }
-                    console.log('final stepCount = ' + stepCount);
-
-                    // Very small circles do funny things due to multiple overlapping, easiest to just count blocks directly in that case
-                    if (maxx - minx <= 4 || maxz - minz <= 4) {
-                        pathBlocks = 0;
-                        connectBlocks = 0;
-                        for (var x = minx; x <= maxx; x++) {
-                            for (var z = minz; z <= maxz; z++) {
-                                var type = highlightFn({x: x, z: z});
-                                if (type != null) pathBlocks++;
-                                if (type == 'connect') connectBlocks++;
-                            }
-                        }
-                    }
-                }
-                setBlockCountLabel('path', pathBlocks);
-                setBlockCountLabel('highlight', pathBlocks - connectBlocks);
-                setBlockCountLabel('connect', connectBlocks);
+                endWalk();
+                renderPath();
             }
 
             function setBlockCountLabel(type, count) {
@@ -1891,7 +2037,7 @@
                     start: segmentPoint(segment, offset),
                     orientation: segment.orientation,
                     count: segment.count - offset,
-                    startIsConnect: offset == 0 ? segment.startIsConnect : false,
+                    startIsConnect: offset == 0 ? segment.startIsConnect : offset == segment.count ? segment.endIsConnect : false,
                     endIsConnect: segment.endIsConnect,
                 };
             }
@@ -1902,7 +2048,7 @@
                     orientation: segment.orientation,
                     count: count,
                     startIsConnect: segment.startIsConnect,
-                    endIsConnect: count == segment.count ? segment.endIsConnect : false,
+                    endIsConnect: count == segment.count ? segment.endIsConnect : count == 0 ? segment.startIsConnect : false,
                 };
             }
 
@@ -2004,6 +2150,21 @@
                 };
             }
 
+            function* allSegments(direction, highlightFn) {
+
+                var first = findStartSegment(1, highlightFn);
+
+                if (first != null) {
+                    yield first.segment;
+
+                    for (var segment = segmentNext(first.segment, highlightFn);
+                         !vecEqual(segment.start, first.segment.start) || segment.orientation != first.segment.orientation;
+                         segment = segmentNext(segment, highlightFn)) {
+                        yield segment;
+                    }
+                }
+            }
+
             // segment is {direction, start, orientation, count, startIsConnect, endIsConnect}
             function segmentStr(segment) {
                 return (segment.direction > 0 ? 'Clockwise ' : 'Anticlockwise ') +
@@ -2056,6 +2217,9 @@
                 setAnimSpeed();
                 var walkPoint = segmentPoint(walkSegment, walkOffset);
                 elemsDo('.viewport', elemSetStyle('--point-x', walkPoint.x), elemSetStyle('--point-z', walkPoint.z));
+
+                const showSize = {x: 20, z: 20};
+                setShownChunks({from: chunkOfPoint(vecSub(walkPoint, showSize)), to: chunkOfPoint(vecAdd(walkPoint, showSize))});
 
                 $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west');
                 $('.walkpoint').removeClass('walkpoint');
@@ -2127,6 +2291,9 @@
                 walkAnimating = false;
                 setHash();
 
+                let w = elemBy('.viewport .window');
+                w.scrollLeft = 0;
+                w.scrollTop = 0;
                 moveToWalkPoint('walk-mode');
                 walkStep();
             }
@@ -2138,6 +2305,7 @@
                 $('.viewport').removeClass('face-north face-south face-east face-west turn-left turn-right turn-180 move-north move-south move-east move-west walk-mode');
                 $('.walkpoint').removeClass('walkpoint');
                 $('.fading').removeClass('fading');
+                clearShownChunks();
                 setHash();
             }
 
@@ -2249,30 +2417,16 @@
                 return blocks;
             }
 
-            function setGridArea() {
-                clearGrid();
-
-                elemDo('circleViewport',
-                    elemSetStyle('--fromx', from.x),
-                    elemSetStyle('--fromz', from.z),
-                    elemSetStyle('--cols', to.x - from.x + 1),
-                    elemSetStyle('--rows', to.z - from.z + 1));
-            }
-
-            function renderAreaPath(id, areaFrom, areaTo) {
-
-            }
-
-            function renderArea(id, areaFrom, areaTo) {
-                var bg = getMajorityBlockType(areaFrom, areaTo);
-                var area = createBlocksDiv('chunk across ' + bg, areaFrom, areaTo.x - areaFrom.x + 1, areaTo.z - areaFrom.z + 1);
+            function renderArea(id, rect) {
+                var bg = getMajorityBlockType(rect.from, rect.to);
+                var area = createBlocksDiv('chunk across ' + bg, rect.from, rect.to.x - rect.from.x + 1, rect.to.z - rect.from.z + 1);
                 area.setAttribute('id', id);
                 area.appendChild(createBlocksDiv('down trans'));
-                for (var z = areaFrom.z; z <= areaTo.z; z++) {
+                for (var z = rect.from.z; z <= rect.to.z; z++) {
                     var stripType = bg;
                     var stripLen = 0;
                     var strip = null;
-                    for (var x = areaFrom.x; x <= areaTo.x; x++) {
+                    for (var x = rect.from.x; x <= rect.to.x; x++) {
                         var point = { x: x, z: z };
                         var dist = getDistance(center, point);
                         var type = 'outside';
@@ -2296,90 +2450,8 @@
                         }
                     }
                 }
-
-                var highlightFn = getCurrentHighlightFunction();
-                var first = findStartSegment(1, highlightFn);
-
-                if (first != null) {
-
-                    var lastSegmentWasRendered = false;
-                    var pathLayer = null;
-
-                    var isFirstSegment = true;
-                    for (var rawSegment = first.segment;
-                         isFirstSegment || !vecEqual(rawSegment.start, first.segment.start);
-                         rawSegment = segmentNext(rawSegment, highlightFn)) {
-
-                        isFirstSegment = false;
-                        var segment = rawSegment;
-
-                        console.log('Working on rendering ' + segmentStr(segment));
-                        // Skip it!
-
-                        // Zero-length segments never need rendering at all and don't even count as a "last segment".
-                        if (segment.count == 0) continue;
-
-                        // If the last segment was rendered and this one's length is 1, we don't need to render it.
-                        if (lastSegmentWasRendered && segment.count == 1) { lastSegmentWasRendered = false; continue; }
-
-                        lastSegmentWasRendered = false;
-
-
-                        // Flip it!
-
-                        // If the segment is going in a negative coordinate direction, reverse it.
-                        if (segment.orientation >= 2) segment = segmentReverse(segment);
-
-
-                        // Clip it!
-
-                        // If the segment is outside the area being rendered then we don't need to render it.
-                        var end = segmentEnd(segment);
-                        if (segment.start.x > areaTo.x || end.x < areaFrom.x || segment.start.z > areaTo.z || end.z < areaFrom.z) continue;
-
-                        // Trim the ends off the segment to get just the part that's within the area.
-                        if (segment.start.x < areaFrom.x) segment = segmentSkip(segment, areaFrom.x - segment.start.x);
-                        if (segment.start.z < areaFrom.z) segment = segmentSkip(segment, areaFrom.z - segment.start.z);
-                        if (end.x > areaTo.x) segment = segmentTruncate(segment, areaTo.x - segment.start.x + 1);
-                        if (end.z > areaTo.z) segment = segmentTruncate(segment, areaTo.z - segment.start.z + 1);
-
-
-                        // Tip it!
-
-                        lastSegmentWasRendered = true;
-                        if (pathLayer == null) {
-                            pathLayer = document.createElement('div');
-                            pathLayer.setAttribute('id', 'path-' + id);
-                            pathLayer.setAttribute('class', 'path-blocks-layer');
-                            elemById('grid-path-holder').appendChild(pathLayer);
-                        }
-
-                        // If the first block is a 'connect', render it.
-                        if (segment.startIsConnect) {
-                            pathLayer.appendChild(createBlocksDiv('connect', segment.start));
-                            segment = segmentSkip(segment, 1);
-                        }
-
-                        // If the last square is a 'connect', render it.
-                        if (segment.count >= 0 && segment.endIsConnect) {
-                            pathLayer.appendChild(createBlocksDiv('connect', segmentEnd(segment)));
-                            segment = segmentTruncate(segment, segment.count - 1);
-                        }
-
-
-                        // Strip it!
-
-                        // Render the remaining strip of blocks.
-                        if (segment.count >= 0) {
-                            pathLayer.appendChild(createBlocksDiv(
-                                'highlight ' + (segment.orientation == orientations.East ? 'across' : 'down'),
-                                segment.start,
-                                (segment.orientation == orientations.East ? segment.count + 1 : null),
-                                (segment.orientation == orientations.East ? null : segment.count + 1)));
-                        }
-                    }                    
-                }
                 elemById('grid-blocks-holder').appendChild(area);
+                return area;
             }
 
             function circleIntegrate(r, x) {
